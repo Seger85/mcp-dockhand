@@ -4,13 +4,15 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Docker](https://img.shields.io/badge/Docker-ghcr.io-blue)](https://github.com/strausmann/mcp-dockhand/pkgs/container/mcp-dockhand)
 
-An MCP (Model Context Protocol) server that exposes **130+ Dockhand API endpoints** as MCP tools. Manage your entire Docker infrastructure through AI assistants.
+An MCP (Model Context Protocol) server that exposes the Dockhand API as MCP tools. Manage your entire Docker infrastructure through AI assistants.
+
+**API coverage:** 88.7% of in-scope Dockhand endpoints (282/318) have an MCP tool — see [`docs/coverage.md`](docs/coverage.md) for the full, auto-updated breakdown by area.
 
 [Dockhand](https://github.com/fnsys/dockhand) is a Docker management server that connects to multiple Docker hosts via Hawser agents. This MCP server provides full programmatic access to all Dockhand features.
 
 ## Features
 
-- **130+ MCP Tools** covering all Dockhand API endpoints
+- **280+ MCP Tools** covering the Dockhand API — see [`docs/coverage.md`](docs/coverage.md) for exact, auto-updated coverage
 - **Streamable HTTP Transport** (MCP Spec 2025-03-26) for Docker container hosting
 - **Session-based Auth** with auto-relogin on 401
 - **SSE Support** for deploy operations (start, stop, down, restart)
@@ -65,7 +67,121 @@ DOCKHAND_URL=https://your-server.com DOCKHAND_USERNAME=admin DOCKHAND_PASSWORD=s
 | `DOCKHAND_USERNAME` | Yes | - | Dockhand username |
 | `DOCKHAND_PASSWORD` | Yes | - | Dockhand password |
 | `MCP_PORT` | No | `8080` | Port for the MCP server |
-| `LOG_LEVEL` | No | `info` | Log level |
+| `MCP_SESSION_TTL_SECONDS` | No | `1800` | Inactivity timeout before a retained MCP session is expired |
+| `MCP_SESSION_CLEANUP_INTERVAL_SECONDS` | No | `300` | Interval for removing expired sessions (clamped to the session TTL) |
+| `MCP_MAX_SESSIONS` | No | `0` | Maximum retained sessions; `0` keeps the existing unlimited behavior |
+| `MCP_HOST` | No | `0.0.0.0` | Listen address. Kept as the wildcard address by default so the published Docker port (`-p 8080:8080` / `docker-compose.yml`) keeps working; see [Securing the transport](#securing-the-transport) for the recommended way to protect the endpoint instead of binding loopback-only |
+| `MCP_ALLOWED_HOSTS` | No | *(unset — Host check disabled)* | Comma-separated `Host` header allowlist for `/mcp` (DNS-rebinding protection). **Opt-in**: unset means no Host check at all (pre-existing behavior, so existing deployments aren't broken by an update). Recommended once you set it up — see [Securing the transport](#securing-the-transport) |
+| `MCP_ALLOWED_ORIGINS` | No | *(unset — Origin check disabled)* | Comma-separated `Origin` header allowlist for `/mcp`. Opt-in, same as above. Only enforced when a caller actually sends an `Origin` header at all (non-browser MCP clients typically don't) |
+| `MCP_AUTH_TOKEN` | No | *(unset — endpoint unauthenticated)* | Shared secret required as `Authorization: Bearer <token>` on every `/mcp` request. Opt-in; recommended once the endpoint is reachable beyond your own loopback — see [Securing the transport](#securing-the-transport) |
+| `LOG_LEVEL` | No | `info` | `error`, `warn`, `info` or `debug`. `debug` adds one line per Dockhand request (method, endpoint template, status, duration). For requests through the client the duration spans the full response body and a `bytes` body-size field is added; the login and self-check probes (which bootstrap the client and so can't route through it) log time-to-headers without a `bytes` field. Never a path segment or a parameter value. An unrecognised value warns and falls back to `info`. |
+| `TRUSTED_PROXIES` | No | _(empty)_ | Comma-separated addresses or CIDRs allowed to set `X-Forwarded-For` / `X-Real-IP`, e.g. `10.0.0.0/8, 100.64.0.0/10`. Empty means the headers are ignored and the peer address is used. |
+
+### Securing the transport
+
+`/mcp` binds `0.0.0.0:8080` by default (see `MCP_HOST` above), and out of the box — with none of
+`MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS`, or `MCP_AUTH_TOKEN` set — it accepts **any** request
+with **no** Host/Origin check and **no** authentication. This is the same behavior mcp-dockhand
+has always had, kept as the default deliberately: enabling a check by default would reject
+requests from any client that doesn't reach the server as `localhost`/`127.0.0.1` (a LAN IP, a
+reverse proxy, a Docker network alias), breaking existing deployments on a routine update.
+
+**You should turn this on** once `/mcp` is reachable beyond your own machine's loopback interface
+— the server holds one Dockhand admin credential and every tool call acts with that identity, so
+anyone who can open an MCP session controls Docker (container exec, host bind-mounts via
+`create_container`, file read/write, stored git credentials). With no protection configured, the
+server logs a `[security] WARNING` at startup as a reminder. Three independent, all-opt-in layers
+are available:
+
+1. **Host allowlist (`MCP_ALLOWED_HOSTS`).** Once set to a non-empty value, every request to
+   `/mcp` — `POST`, `GET`, and `DELETE` — is rejected with `403` unless its `Host` header matches
+   the allowlist. This is the primary defense against
+   [DNS-rebinding](https://en.wikipedia.org/wiki/DNS_rebinding): a malicious web page cannot make
+   the operator's browser reach the server under a Host value the allowlist accepts. Set it to
+   however your client actually reaches the server — `localhost:8080`/`127.0.0.1:8080` for the
+   documented local setup, or, if you connect directly by address rather than through
+   `localhost` (including the mcp-proxy remote-server setup below), the exact `host:port` your
+   client sends, e.g. `100.100.50.40:8222`. Get this wrong and every request is rejected with
+   `403 Invalid Host header` — check the message, it echoes the Host value it saw.
+2. **Origin allowlist (`MCP_ALLOWED_ORIGINS`).** Once set, any request that *does* send an
+   `Origin` header not in the list is rejected with `403`. A missing `Origin` header always passes
+   (the SDK's own MCP client and most non-browser tooling never send one), so this is only useful
+   if a browser-based client talks to `/mcp` directly; the Host allowlist above is what actually
+   stops DNS-rebinding.
+3. **Bearer token (`MCP_AUTH_TOKEN`).** Once set, every `/mcp` request must carry
+   `Authorization: Bearer <token>` or is rejected with `401`; the comparison is constant-time.
+   Recommended alongside the Host allowlist for any deployment reachable from more than the
+   operator's own machine.
+
+```bash
+# .env — recommended configuration once /mcp is reachable beyond loopback
+MCP_ALLOWED_HOSTS=dock-mcp.internal.example.com
+# or, connecting directly by address instead of a hostname:
+#MCP_ALLOWED_HOSTS=100.100.50.40:8222
+MCP_AUTH_TOKEN=<a long random secret, e.g. `openssl rand -hex 32`>
+```
+
+## Securing the server with CrowdSec
+
+The server writes an nginx-format access line to **stdout** for every request,
+including the ones it rejects, while the structured application log goes to
+**stderr**. CrowdSec parses the access lines with its stock collections — no custom
+parser required.
+
+Add an acquisition file on the host running your CrowdSec agent:
+
+```yaml
+source: docker
+container_name:
+  - mcp-dockhand
+labels:
+  type: docker
+  program: nginx-mcp
+```
+
+**Both labels are required, and neither fails loudly if you forget it.**
+`type: docker` enables `crowdsecurity/docker-logs`, which unwraps Docker's JSON
+envelope. `program: nginx-mcp` enables `crowdsecurity/nginx-logs`, which matches on
+`program` starting with `nginx` — the `-mcp` suffix keeps this source distinguishable
+from your other nginx sources. With one label missing the chain simply produces
+nothing, and nothing reports it.
+
+Once wired up, the stock scenarios apply:
+
+| Scenario | What it means here |
+|---|---|
+| `LePresidente/http-generic-401-bf` | Repeated `401` on `/mcp` — someone is guessing `MCP_AUTH_TOKEN` |
+| `crowdsecurity/http-dos-swithcing-ua` | Request floods with rotating user agents |
+
+A `403` is worth watching too: it means a request failed the `MCP_ALLOWED_HOSTS` or
+`MCP_ALLOWED_ORIGINS` check, which is what a DNS-rebinding attempt looks like from
+here.
+
+> **The stock 401 scenario only counts `POST`.** Its filter is
+> `evt.Parsed.verb == 'POST'` — one literal, not a list. This server serves `POST`, `GET`
+> and `DELETE` on `/mcp`, and the bearer check runs ahead of all three, so a wrong token
+> on `GET /mcp` or `DELETE /mcp` returns `401` exactly like `POST` does — and
+> `LePresidente/http-generic-401-bf` never counts those. Someone guessing
+> `MCP_AUTH_TOKEN` over `GET /mcp` is invisible to it.
+>
+> This is a property of the upstream scenario, shared with every nginx deployment that
+> uses it — not something this server's log format can fix. To close it, add a local
+> scenario that drops the `verb` filter, or matches the three methods this server
+> answers on. Until then, treat the row above as "repeated `401` on **`POST`** `/mcp`".
+
+> **Set `TRUSTED_PROXIES` before you enable this.**
+> Behind a reverse proxy every request arrives from the proxy's address. Without
+> `TRUSTED_PROXIES` that address is what gets logged — so the first ban CrowdSec
+> issues takes out the proxy, and with it every user behind it. Set it to the
+> address or subnet your proxy talks from.
+>
+> The setting is equally deliberate in the other direction: the forwarding headers
+> are only honoured from a peer on that list. Trusting them unconditionally would let
+> any direct caller name an arbitrary third party and have them banned.
+
+**One expected side effect:** the structured JSON lines share the container's log
+stream and carry the same `program` label, so they fail the nginx pattern and count
+as `unparsed` in `cscli metrics`. That is noise, not a fault — no alert, no decision.
 
 ## MCP Client Configuration
 
@@ -82,6 +198,64 @@ Add to your MCP settings:
   }
 }
 ```
+
+> **If the server enforces a bearer token** (`MCP_AUTH_TOKEN` set — see
+> [Securing the transport](#securing-the-transport)), the client must send it as an
+> `Authorization` header, or every request is rejected with `401`. In Claude Code's
+> `.mcp.json`, add a `headers` block — reference an environment variable so the token
+> never lives in the (often version-controlled) config file:
+>
+> ```json
+> {
+>   "mcpServers": {
+>     "dockhand": {
+>       "type": "http",
+>       "url": "http://your-server:8080/mcp",
+>       "headers": { "Authorization": "Bearer ${DOCKHAND_MCP_TOKEN}" }
+>     }
+>   }
+> }
+> ```
+>
+> **Send the token only over an encrypted transport.** A bearer over plain `http://` on a
+> shared network can be sniffed — terminate TLS at a reverse proxy, or reach the server over
+> a WireGuard/Tailscale/VPN link (the app-layer HTTP is then encrypted by the tunnel).
+>
+> Export `DOCKHAND_MCP_TOKEN` in the environment Claude Code is launched from (e.g. from a
+> gitignored `.env` you `source` before starting). The `Host`/`host:port` you connect to
+> must also be in the server's `MCP_ALLOWED_HOSTS` if that allowlist is set. For **Claude
+> Desktop** (native config has no `headers` field), pass the token through the mcp-proxy
+> workaround below — mcp-proxy forwards an `Authorization` header via its own
+> environment/args.
+
+#### Claude Desktop with a remote server (mcp-proxy)
+
+Claude Desktop can fail to connect to a **remote** mcp-dockhand server (not
+`localhost`) using the native `"url"` config above, even though the endpoint
+itself is reachable. The symptom is a generic `"not a valid MCP server"` error
+in Claude Desktop, while a plain browser/`curl` request to the same URL
+correctly returns `{"error":"Invalid or missing session ID"}`. This is a known
+limitation of Claude Desktop with remote Streamable HTTP servers, not a
+mcp-dockhand bug.
+
+**Workaround:** wrap the connection with
+[mcp-proxy](https://github.com/sparfenyuk/mcp-proxy), which translates
+Streamable HTTP to stdio — a transport Claude Desktop handles reliably:
+
+```json
+{
+  "mcpServers": {
+    "dockhand": {
+      "command": "/path/to/mcp-proxy",
+      "args": ["--transport", "streamablehttp", "http://your-server:8080/mcp"]
+    }
+  }
+}
+```
+
+All tools load and work correctly through the proxy. Thanks to
+[@deadrubberboy](https://github.com/deadrubberboy) for reporting this and
+sharing the workaround ([#90](https://github.com/strausmann/mcp-dockhand/issues/90)).
 
 ## Tool Reference
 
@@ -104,15 +278,17 @@ Add to your MCP settings:
 | `update_container` | Update container settings |
 | `create_container` | Create a new container |
 | `get_container_shells` | List available shells |
+| `exec_container` | Create a terminal exec session (execId + WS connectionInfo); does NOT run a one-shot command or return output — no such endpoint exists in the Dockhand API |
 | `list_container_files` | Browse files inside container |
 | `get_container_file_content` | Read file from container |
-| `create_container_file` | Create file in container |
+| `create_container_file` | Create an empty file or directory in container (no content — use `write_container_file_content` for that) |
 | `delete_container_file` | Delete file in container |
 | `rename_container_file` | Rename file in container |
 | `chmod_container_file` | Change file permissions |
 | `check_container_updates` | Check for image updates |
 | `get_pending_updates` | Get pending updates |
 | `batch_update_containers` | Batch update containers |
+| `execute_batch` | Run a bulk lifecycle operation (start/stop/restart/remove/etc.) across containers, images, volumes, networks, or stacks |
 | `get_container_sizes` | Get container disk sizes |
 | `get_containers_stats` | Get aggregated stats |
 
@@ -275,7 +451,7 @@ Add to your MCP settings:
 | `delete_notification` | Delete notification |
 | `test_notification` | Test notification |
 | `test_notification_config` | Test without saving |
-| `trigger_test_notification` | Trigger test event |
+| `trigger_test_notification` | Trigger a real test event for a given event type + payload |
 
 ### Registries (10 tools)
 
@@ -312,7 +488,7 @@ Add to your MCP settings:
 | `get_scanner_settings` | Scanner settings |
 | `update_scanner_settings` | Update scanner |
 | `get_license` | License info |
-| `activate_license` | Activate license |
+| `activate_license` | Activate license by name and key |
 | `get_prometheus_metrics` | Prometheus metrics |
 | `prune_all` | Prune all resources |
 
@@ -329,9 +505,10 @@ Add to your MCP settings:
 | `enable_user_mfa` | Enable MFA |
 | `disable_user_mfa` | Disable MFA |
 | `get_user_roles` | Get user roles |
-| `set_user_roles` | Set user roles |
+| `add_user_role` | Assign one role to a user (no bulk-replace) |
+| `remove_user_role` | Unassign one role from a user |
 | `list_roles` | List roles |
-| `create_role` | Create role |
+| `create_role` | Create role with name + permissions object |
 | `get_role` | Get role |
 | `update_role` | Update role |
 | `delete_role` | Delete role |
@@ -362,6 +539,40 @@ Add to your MCP settings:
 | `get_auto_update_settings` | Get all auto-update settings |
 | `get_container_auto_update` | Get container auto-update |
 | `set_container_auto_update` | Set auto-update policy |
+
+### Self-help / meta tools (6 tools)
+
+Diagnostics for **this MCP server itself**, distinct from the Dockhand API tools above —
+useful for a client or operator asking "is *this server* healthy and correctly configured?"
+rather than "is Dockhand healthy?". None of these six take any input arguments, and none of
+them wrap a single Dockhand endpoint the way the tables above do (`get_tool_manifest` and
+`get_runtime_stats` call no Dockhand endpoint at all) — see `src/tools/meta.ts`.
+
+| Tool | Description |
+|------|-------------|
+| `get_server_info` | This server's own version, git SHA, build date, uptime, MCP protocol version, and the Dockhand URL/server version it's connected to |
+| `check_for_update` | Compares this server's running version against the latest GitHub release (TTL-cached) |
+| `get_tool_manifest` | Lists every registered tool with its Dockhand `{method, path}`, plus the pinned Dockhand OpenAPI commit/version this server's tools were generated against |
+| `self_check` | End-to-end diagnostic: Dockhand reachability, credential validity, and a live, per-environment reachability check (`POST /api/environments/{id}/test`, run in parallel with a 5s per-environment timeout) plus Hawser-agent-connected status, in one call |
+| `validate_config` | Checks that the required `DOCKHAND_URL`/`DOCKHAND_USERNAME`/`DOCKHAND_PASSWORD` env vars are present and that they authenticate successfully |
+| `get_runtime_stats` | In-process counters for this server: total/per-tool call and error counts, uptime, and the last error's tool/message/timestamp |
+
+**Notes:**
+
+- `check_for_update` needs outbound network access to `api.github.com` (GitHub's releases
+  API) — it will degrade to `updateAvailable: null` rather than fail if that's unreachable.
+- **No meta tool exposes any secret value.** `validate_config` reports only whether the
+  required env vars are *present* (booleans) and whether they *authenticate* (a boolean +
+  the raw HTTP status code, e.g. `200`/`401`) — never the credential values themselves.
+  `self_check` reports auth validity the same way. `get_runtime_stats`' `lastError` carries
+  only a tool name, an error message, and a timestamp — never call arguments or response
+  payloads. **That error message is not fully opaque, though:** for a failed Dockhand API
+  call it can embed a slice of the upstream HTTP status and response body (via
+  `DockhandClient`'s own `Dockhand API error: ... returned <status>: <body>` message), and
+  it is echoed to whichever MCP client next calls `get_runtime_stats` — not necessarily the
+  one that hit the original error. It never includes request bodies or credential values,
+  and it is truncated to 500 characters (with an ellipsis marker) before being stored, so an
+  oversized upstream response is never echoed wholesale.
 
 ## Important Notes
 
@@ -401,6 +612,24 @@ The server uses session-based cookie authentication. It automatically:
 - Re-authenticates on 401 responses
 - Handles session timeout (24h)
 
+### Troubleshooting
+
+Start with `LOG_LEVEL=debug`. Every Dockhand request then appears with its endpoint,
+status code and duration, and every line of a single call shares one
+`call` identifier — `grep` for it to get the whole sequence. The `req` identifier
+ties those lines back to the access line that started them, and `sid` covers
+everything one client did across its whole session. For requests through the client, `ms` is the full request
+duration — it spans the response body being read, not just the time until the
+response headers arrived, so it reflects what a slow or stalled streamed
+response (e.g. a deploy's SSE output) actually cost — and `bytes` is the size of the
+body that was actually read. (The login and self-check probes bootstrap the client and can't route through it, so their lines log time-to-headers without a `bytes` field.) A failed Dockhand request additionally logs a
+`warn` line carrying `errType` — the exception name (e.g. `TimeoutError`, `TypeError`),
+a bounded vocabulary rather than free text — so you can filter failures by error
+type. That warn line fires both when the request itself failed before any
+response arrived, and when a response body's read failed partway through (e.g.
+an SSE stream hitting its timeout mid-stream) — either way `ms` reflects how
+long it took to fail.
+
 ## Development
 
 ```bash
@@ -419,6 +648,19 @@ DOCKHAND_USERNAME=admin \
 DOCKHAND_PASSWORD=secret \
 npm run dev
 ```
+
+### Linting
+
+`npm run lint` lints `src/` and `tests/` with two rules: `no-unused-vars` and
+`no-explicit-any`. Because `typescript-eslint` does not support the pinned
+`typescript@^7.0.2` compiler — it hard-throws on TS 7.0, not just a peer warning: see
+[typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)
+— the lint runs inside a throwaway `node:22` container with pinned TypeScript 5 (the
+language is identical across TS 5/6/7; only the compiler differs). It mounts `src/`,
+`tests/` and `eslint.config.js` read-only, so **Docker is required** to run it. The same
+script runs as a hard gate in CI. Unused imports/locals are additionally caught natively on
+TS 7 by `tsc` (`noUnusedLocals`/`noUnusedParameters` in `tsconfig.tests.json`, via
+`npm run typecheck:tests`).
 
 ## License
 

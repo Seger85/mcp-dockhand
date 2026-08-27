@@ -24,6 +24,9 @@ import { registerVulnerabilityTools } from './vulnerabilities.js';
 import { registerTemplateTools } from './templates.js';
 import { registerLabelTools } from './labels.js';
 import { registerPreferenceTools } from './preferences.js';
+import { registerSecretProviderTools } from './secret-providers.js';
+import { registerMetaTools } from './meta.js';
+import { logger } from '../utils/logger.js';
 
 export function registerAllTools(server: McpServer, client: DockhandClient): void {
   registerContainerTools(server, client);
@@ -46,6 +49,8 @@ export function registerAllTools(server: McpServer, client: DockhandClient): voi
   registerTemplateTools(server, client);
   registerLabelTools(server, client);
   registerPreferenceTools(server, client);
+  registerSecretProviderTools(server, client);
+  registerMetaTools(server, client);
 
-  console.error('[tools] All Dockhand tools registered');
+  logger.info({ component: 'tools' }, 'all Dockhand tools registered');
 }

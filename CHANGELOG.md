@@ -5,6 +5,167 @@ All notable changes to **MCP-Dockhand** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.2](https://github.com/strausmann/mcp-dockhand/compare/v1.15.1...v1.15.2) (2026-08-27)
+
+### Bug Fixes
+
+* **environments:** stop leaking hawserToken and tlsKey in environment responses ([#233](https://github.com/strausmann/mcp-dockhand/issues/233)) ([bac0e73](https://github.com/strausmann/mcp-dockhand/commit/bac0e73dfa12c8b76cfeea229026da039e91d6be)), references [#232](https://github.com/strausmann/mcp-dockhand/issues/232)
+
+### Documentation
+
+* **api:** update API coverage report (automated) ([5399c7c](https://github.com/strausmann/mcp-dockhand/commit/5399c7c6c99cacdb7fd282b089e422c31a18b4bb))
+* **api:** update API coverage report (automated) ([f12d4aa](https://github.com/strausmann/mcp-dockhand/commit/f12d4aa892e993baafc792ad168eeced4d043d22))
+* **api:** update API coverage report (automated) ([2c01d4d](https://github.com/strausmann/mcp-dockhand/commit/2c01d4d71afe1299f276b5089f2f75a0008de561))
+
+## [1.15.1](https://github.com/strausmann/mcp-dockhand/compare/v1.15.0...v1.15.1) (2026-08-20)
+
+### Bug Fixes
+
+* **client:** derive each request's own route template in the debug log ([#219](https://github.com/strausmann/mcp-dockhand/issues/219)) ([98629c0](https://github.com/strausmann/mcp-dockhand/commit/98629c0b07aaf691e63715263082a326bc2a9dde)), closes [#214](https://github.com/strausmann/mcp-dockhand/issues/214), references [#214](https://github.com/strausmann/mcp-dockhand/issues/214)
+* **client:** measure ms/bytes at body completion for streamed responses ([#223](https://github.com/strausmann/mcp-dockhand/issues/223)) ([8ee1d5e](https://github.com/strausmann/mcp-dockhand/commit/8ee1d5e5e085325657295c3322054931eec11dcc)), closes [#215](https://github.com/strausmann/mcp-dockhand/issues/215), references [#215](https://github.com/strausmann/mcp-dockhand/issues/215) [#215](https://github.com/strausmann/mcp-dockhand/issues/215) [pre-#215](https://github.com/pre-/issues/215) [#215](https://github.com/strausmann/mcp-dockhand/issues/215)
+
+### Documentation
+
+* **api:** update API coverage report (automated) ([c103740](https://github.com/strausmann/mcp-dockhand/commit/c10374049afec166e83f240a641f4c72e74e705d))
+
+## [1.15.0](https://github.com/strausmann/mcp-dockhand/compare/v1.14.0...v1.15.0) (2026-08-19)
+
+### Features
+
+* make LOG_LEVEL real, add an access log CrowdSec can parse ([#209](https://github.com/strausmann/mcp-dockhand/issues/209)) ([b88cdaa](https://github.com/strausmann/mcp-dockhand/commit/b88cdaaaa3942933d8104cc7918c9a81bca341fb))
+
+### Bug Fixes
+
+* **client:** unify error logging on flat errType, pin the serializer trap ([#218](https://github.com/strausmann/mcp-dockhand/issues/218)) ([6ed596f](https://github.com/strausmann/mcp-dockhand/commit/6ed596ff2130db301b21ae30a44b29460195d0d9)), closes [#212](https://github.com/strausmann/mcp-dockhand/issues/212)
+* **system:** async log destination in production, sync fatal-exit lines ([#216](https://github.com/strausmann/mcp-dockhand/issues/216)) ([e3d785a](https://github.com/strausmann/mcp-dockhand/commit/e3d785a6a49e16af206173c8d21bbd227e861f39)), closes [#210](https://github.com/strausmann/mcp-dockhand/issues/210), references [#210](https://github.com/strausmann/mcp-dockhand/issues/210) [#210](https://github.com/strausmann/mcp-dockhand/issues/210)
+* **system:** make log-context isolation a module invariant ([#217](https://github.com/strausmann/mcp-dockhand/issues/217)) ([75c5d0f](https://github.com/strausmann/mcp-dockhand/commit/75c5d0fd43ebd5879c2beb92a839c2747ac35ed4)), closes [#211](https://github.com/strausmann/mcp-dockhand/issues/211), references [#209](https://github.com/strausmann/mcp-dockhand/issues/209)
+
+### Documentation
+
+* **api:** update API coverage report (automated) ([5cdcf31](https://github.com/strausmann/mcp-dockhand/commit/5cdcf3150798bce0946974816cf1ad60e54854b7))
+
+## [1.14.0](https://github.com/strausmann/mcp-dockhand/compare/v1.13.2...v1.14.0) (2026-08-18)
+
+### Features
+
+* **api:** align with Dockhand 1.0.42 ([d170dbf](https://github.com/strausmann/mcp-dockhand/commit/d170dbff4f0889327feeecac23541b8e74f5e946)), references [#1399](https://github.com/strausmann/mcp-dockhand/issues/1399) [#196](https://github.com/strausmann/mcp-dockhand/issues/196)
+* **tools:** full secret-provider coverage for Dockhand 1.0.42 ([d9e19c0](https://github.com/strausmann/mcp-dockhand/commit/d9e19c0f38c64478b74ccac2d996e00b68e8bac9)), references [#196](https://github.com/strausmann/mcp-dockhand/issues/196)
+
+### Bug Fixes
+
+* **api:** fail closed when the body-shape collector dies ([c636aeb](https://github.com/strausmann/mcp-dockhand/commit/c636aeb0f986e237661e278396feceb36ec761a6)), closes [#173](https://github.com/strausmann/mcp-dockhand/issues/173), references [#205](https://github.com/strausmann/mcp-dockhand/issues/205) [#205](https://github.com/strausmann/mcp-dockhand/issues/205) [#196](https://github.com/strausmann/mcp-dockhand/issues/196) [#196](https://github.com/strausmann/mcp-dockhand/issues/196)
+* **api:** point the coverage generator at the current backup issue ([6496b76](https://github.com/strausmann/mcp-dockhand/commit/6496b761e90487b931bc22d1e1648281aa248690)), references [#164](https://github.com/strausmann/mcp-dockhand/issues/164) [#202](https://github.com/strausmann/mcp-dockhand/issues/202) [#164](https://github.com/strausmann/mcp-dockhand/issues/164) [#202](https://github.com/strausmann/mcp-dockhand/issues/202) [#164](https://github.com/strausmann/mcp-dockhand/issues/164) [#196](https://github.com/strausmann/mcp-dockhand/issues/196) [#202](https://github.com/strausmann/mcp-dockhand/issues/202)
+* **stacks:** drop the type argument that hid the endpoint from the extractor ([abced69](https://github.com/strausmann/mcp-dockhand/commit/abced6999c8b4661fc9ad5a11d299b43fb76294b)), references [#198](https://github.com/strausmann/mcp-dockhand/issues/198)
+* **stacks:** return the .env content from get_stack_env_raw, not the envelope ([23b2240](https://github.com/strausmann/mcp-dockhand/commit/23b2240f17cdf5fcb6af53636d7de069e0e3c3a2)), closes [#198](https://github.com/strausmann/mcp-dockhand/issues/198), references [#196](https://github.com/strausmann/mcp-dockhand/issues/196)
+
+### Documentation
+
+* **tools:** state outright that exec_container returns no output ([10673d6](https://github.com/strausmann/mcp-dockhand/commit/10673d6e03be114962053cfa1fd80c8118b07697)), references [#195](https://github.com/strausmann/mcp-dockhand/issues/195) [#195](https://github.com/strausmann/mcp-dockhand/issues/195)
+
+### CI/CD
+
+* **api:** gate the body-contract report too, and say why the schema is not gated ([f22cc33](https://github.com/strausmann/mcp-dockhand/commit/f22cc333732275b57e5825bdb03069aea761397e)), references [#201](https://github.com/strausmann/mcp-dockhand/issues/201) [#196](https://github.com/strausmann/mcp-dockhand/issues/196)
+* **api:** regenerate coverage doc and gate the derived documents ([e70cd09](https://github.com/strausmann/mcp-dockhand/commit/e70cd09982e8e7408eb2cdf9de09152cb4b32526)), references [#196](https://github.com/strausmann/mcp-dockhand/issues/196)
+* **release:** semantic-release-Ausgabe sichtbar machen und Zwangs-Build ermoeglichen ([2dee811](https://github.com/strausmann/mcp-dockhand/commit/2dee811e3de35549cbc4f58158315dd88cf7f175)), references [#196](https://github.com/strausmann/mcp-dockhand/issues/196)
+
+## [1.13.2](https://github.com/strausmann/mcp-dockhand/compare/v1.13.1...v1.13.2) (2026-08-17)
+
+### Bug Fixes
+
+* **stacks:** raw-.env-Antwort als JSON auswerten statt still zu verwerfen ([337b270](https://github.com/strausmann/mcp-dockhand/commit/337b270bfe71867550c113806cff7a5e61fa1d11)), references [#196](https://github.com/strausmann/mcp-dockhand/issues/196)
+
+### Documentation
+
+* **api:** update API coverage report (automated) ([ccc193f](https://github.com/strausmann/mcp-dockhand/commit/ccc193f694a1b00fe54f21824e66a2181b9acdc5))
+
+## [1.13.1](https://github.com/strausmann/mcp-dockhand/compare/v1.13.0...v1.13.1) (2026-08-15)
+
+### Bug Fixes
+
+* **ci:** give api-schema-sync bot commits a valid commitlint scope ([#191](https://github.com/strausmann/mcp-dockhand/issues/191)) ([78d4a98](https://github.com/strausmann/mcp-dockhand/commit/78d4a98fbe272db6ce2f394de8eeeee16cbbae91))
+
+### Documentation
+
+* **api:** update API coverage report (automated) ([36a1f78](https://github.com/strausmann/mcp-dockhand/commit/36a1f78e7f0a14144134f40a4288f561b3f01157))
+* **api:** update body-contract findings report (automated) ([5a5bfcf](https://github.com/strausmann/mcp-dockhand/commit/5a5bfcfddb4c17ab97710f862d9dc0146fbeafa7))
+* show bearer-token client config when MCP_AUTH_TOKEN is enforced ([#189](https://github.com/strausmann/mcp-dockhand/issues/189)) ([4899d29](https://github.com/strausmann/mcp-dockhand/commit/4899d296847ffd1f6d59bb5996eb632b0b829217)), references [#188](https://github.com/strausmann/mcp-dockhand/issues/188)
+
+## [1.13.0](https://github.com/strausmann/mcp-dockhand/compare/v1.12.0...v1.13.0) (2026-08-12)
+
+### Features
+
+* add self-help / meta tools (server info, update check, tool manifest, diagnostics) ([#186](https://github.com/strausmann/mcp-dockhand/issues/186)) ([b9891bf](https://github.com/strausmann/mcp-dockhand/commit/b9891bf95cd4a75c0460b8a5d5a5a28888f237a8)), references [#116](https://github.com/strausmann/mcp-dockhand/issues/116)
+* **security:** opt-in Host/Origin allowlist and bearer auth for /mcp transport ([#188](https://github.com/strausmann/mcp-dockhand/issues/188)) ([25b5e5b](https://github.com/strausmann/mcp-dockhand/commit/25b5e5bfc4e3e7d85bcf09c2e0a7b123bbcaf1de))
+
+## [1.12.0](https://github.com/strausmann/mcp-dockhand/compare/v1.11.0...v1.12.0) (2026-08-11)
+
+### ⚠ BREAKING CHANGES
+
+* **tools:** list_batch_operations renamed to execute_batch; set_user_roles split into add_user_role + remove_user_role; set_git_stack_env_files removed (read-only, redundant). Also: activate_license/create_role/trigger_test_notification/create_container_file body-field fixes; explicit envFilePath on create_git_stack/update_git_stack.
+
+### Features
+
+* **api:** add advisory CROSSREF_UNRESOLVED check to the MCP tool validator ([06fde06](https://github.com/strausmann/mcp-dockhand/commit/06fde0672915e661c51d7cd602f5b5ec045388f6)), references [#57](https://github.com/strausmann/mcp-dockhand/issues/57)
+* **api:** derive slim MCP tool descriptions from OpenAPI operations ([d37b986](https://github.com/strausmann/mcp-dockhand/commit/d37b986189ea1b60605244a30dff8dddb32c3fee)), references [#57](https://github.com/strausmann/mcp-dockhand/issues/57)
+* **api:** promote BODY_PARAM_MISSING_REQUIRED to a hard CI gate ([50609fd](https://github.com/strausmann/mcp-dockhand/commit/50609fd6adce3f40f8ea7518d2a0afc868bf0557)), references [#57](https://github.com/strausmann/mcp-dockhand/issues/57)
+* **ci:** publish committed docs/coverage.md, drop dead coverage-tracker ([#165](https://github.com/strausmann/mcp-dockhand/issues/165)) ([d9aa7c8](https://github.com/strausmann/mcp-dockhand/commit/d9aa7c8f0fee5cc5506f6376ca1c5bfc5df4a423))
+* **docs:** add omission registry for deliberately un-mirrored endpoints ([69b06c8](https://github.com/strausmann/mcp-dockhand/commit/69b06c868f24fb54d269dd5d62c43f20ec8fd0da)), references [#164](https://github.com/strausmann/mcp-dockhand/issues/164) [#57](https://github.com/strausmann/mcp-dockhand/issues/57)
+* **validate:** body-contract checks (advisory) via OpenApiContractSource ([#166](https://github.com/strausmann/mcp-dockhand/issues/166)) ([2ce6093](https://github.com/strausmann/mcp-dockhand/commit/2ce60939f0f90e7258aefb4861185888803e44e2)), references [#57](https://github.com/strausmann/mcp-dockhand/issues/57)
+
+### Bug Fixes
+
+* **api:** correct shared-endpoint tool descriptions and lock in cross-ref parity ([cbbc9c9](https://github.com/strausmann/mcp-dockhand/commit/cbbc9c9892eb9e080476c8e79360ebc6fb3fff79)), references [#57](https://github.com/strausmann/mcp-dockhand/issues/57)
+* hard-fail body-contract collector crash, drop unrunnable lint script ([25325aa](https://github.com/strausmann/mcp-dockhand/commit/25325aa75619f06c351bec16e8163d8e9e108676)), closes [#173](https://github.com/strausmann/mcp-dockhand/issues/173) [#176](https://github.com/strausmann/mcp-dockhand/issues/176)
+* **tools:** correct 9 real body-contract bugs found by the validator ([#169](https://github.com/strausmann/mcp-dockhand/issues/169)) ([7960ec4](https://github.com/strausmann/mcp-dockhand/commit/7960ec4a492b93d389c3188a0cc09aa3bb8c2af9))
+* **tools:** correct body field names for 5 tools (guaranteed 400) ([#168](https://github.com/strausmann/mcp-dockhand/issues/168)) ([1bbbdf9](https://github.com/strausmann/mcp-dockhand/commit/1bbbdf91fa239479f7c8364432c7382e9b238cd0)), closes [#167](https://github.com/strausmann/mcp-dockhand/issues/167)
+* **validate:** suppress body-contract false-positives (passthrough + computed-body whitelist) ([#170](https://github.com/strausmann/mcp-dockhand/issues/170)) ([a48a71d](https://github.com/strausmann/mcp-dockhand/commit/a48a71d8729ff52c33485b810e7305f00ffd03ea)), references [#57](https://github.com/strausmann/mcp-dockhand/issues/57)
+
+### Code Refactoring
+
+* **tools:** derive descriptions from the spec, drop hand-written text ([80a24e9](https://github.com/strausmann/mcp-dockhand/commit/80a24e92c48c93bcdf2e648b47f25d37a9384024)), references [#57](https://github.com/strausmann/mcp-dockhand/issues/57)
+
+### Documentation
+
+* **tools:** name accepted in-place fields for update_container_runtime ([#163](https://github.com/strausmann/mcp-dockhand/issues/163)) ([e335713](https://github.com/strausmann/mcp-dockhand/commit/e335713df582f76a65673ae0c6d028051e1b46bd)), closes [#155](https://github.com/strausmann/mcp-dockhand/issues/155)
+
+## [1.11.0](https://github.com/strausmann/mcp-dockhand/compare/v1.10.0...v1.11.0) (2026-08-10)
+
+### Features
+
+* **tools:** extend validate-mcp-tools.mjs with query-param diff ([59ec907](https://github.com/strausmann/mcp-dockhand/commit/59ec90705d227bd924ea58b31423ceeaa649b696)), references [#81](https://github.com/strausmann/mcp-dockhand/issues/81) [#95](https://github.com/strausmann/mcp-dockhand/issues/95)
+
+### Bug Fixes
+
+* **auth:** normalize base URL for login + surface tool errors ([#159](https://github.com/strausmann/mcp-dockhand/issues/159)) ([600a25d](https://github.com/strausmann/mcp-dockhand/commit/600a25d2a37959c70fe43ad920aa1f7d259601cc)), closes [#116](https://github.com/strausmann/mcp-dockhand/issues/116) [#116](https://github.com/strausmann/mcp-dockhand/issues/116), references [#116](https://github.com/strausmann/mcp-dockhand/issues/116)
+* **docker:** healthcheck uses 127.0.0.1 to avoid IPv6 localhost failure on Alpine ([#158](https://github.com/strausmann/mcp-dockhand/issues/158)) ([af6c513](https://github.com/strausmann/mcp-dockhand/commit/af6c513f1dfac248eb4e4b40acea88607d72019d)), closes [#92](https://github.com/strausmann/mcp-dockhand/issues/92) [#84](https://github.com/strausmann/mcp-dockhand/issues/84)
+* **registries:** align get_registry_catalog with the real /api/registry/catalog contract ([6511cf2](https://github.com/strausmann/mcp-dockhand/commit/6511cf2350bb5bc37f09f31981cb389188b095fd)), closes [#147](https://github.com/strausmann/mcp-dockhand/issues/147) [#150](https://github.com/strausmann/mcp-dockhand/issues/150)
+* **registries:** align search_registry with the real /api/registry/search contract ([62d7799](https://github.com/strausmann/mcp-dockhand/commit/62d7799817006f13ab441f6e4a222a0123d5a633)), closes [#146](https://github.com/strausmann/mcp-dockhand/issues/146)
+* **release:** keep package version in sync via @semantic-release/npm (npmPublish:false) ([15c5f3a](https://github.com/strausmann/mcp-dockhand/commit/15c5f3a915a25eb288215eec38dff4353ab24174)), closes [#139](https://github.com/strausmann/mcp-dockhand/issues/139)
+* **release:** relax conventional-changelog-writer override to ^9.2.0 ([7c15fd4](https://github.com/strausmann/mcp-dockhand/commit/7c15fd4ab9888fc8d24c1adf58db1aefc3829efa)), closes [#139](https://github.com/strausmann/mcp-dockhand/issues/139), references [semantic-release/release-notes-generator#1021](https://github.com/semantic-release/release-notes-generator/issues/1021)
+* **tools:** align exec_container with the real Docker-exec-instance contract ([ec79b47](https://github.com/strausmann/mcp-dockhand/commit/ec79b47207d46e538659f94d692d3af70d72d287)), closes [#81](https://github.com/strausmann/mcp-dockhand/issues/81), references [#81](https://github.com/strausmann/mcp-dockhand/issues/81) [#81](https://github.com/strausmann/mcp-dockhand/issues/81)
+* **tools:** correct image-prune settings and trigger HTTP methods ([#141](https://github.com/strausmann/mcp-dockhand/issues/141)) ([6bfce61](https://github.com/strausmann/mcp-dockhand/commit/6bfce61919f1afd47ab3eb44bf86dc6ac1176602)), closes [#138](https://github.com/strausmann/mcp-dockhand/issues/138)
+* **tools:** correct required/optional query params for 6 tools ([#153](https://github.com/strausmann/mcp-dockhand/issues/153)) ([bffc498](https://github.com/strausmann/mcp-dockhand/commit/bffc4980c784e34df93ef8c2955c7b17ebb237b7)), closes [#152](https://github.com/strausmann/mcp-dockhand/issues/152)
+* **tools:** required/optional-aware query-param check, no manual triage ([7e79e54](https://github.com/strausmann/mcp-dockhand/commit/7e79e544e0138aa23eb8a3169b45aee67152312c)), references [#148](https://github.com/strausmann/mcp-dockhand/issues/148)
+* **tools:** update_container — optional settings, explicit fields, reject unknown keys ([#154](https://github.com/strausmann/mcp-dockhand/issues/154)) ([65a71b2](https://github.com/strausmann/mcp-dockhand/commit/65a71b2919691955418f83ce2b0f69480a34b8a1)), closes [#142](https://github.com/strausmann/mcp-dockhand/issues/142)
+
+### Documentation
+
+* **readme:** document mcp-proxy workaround for Claude Desktop (remote) ([#157](https://github.com/strausmann/mcp-dockhand/issues/157)) ([cef7aaf](https://github.com/strausmann/mcp-dockhand/commit/cef7aaf6ef3dd36da1b0b15d7d866aa216aa56a2)), closes [#90](https://github.com/strausmann/mcp-dockhand/issues/90)
+
+## [1.10.0](https://github.com/strausmann/mcp-dockhand/compare/v1.9.1...v1.10.0) (2026-08-09)
+
+### Features
+
+* **server:** bound Streamable HTTP session lifecycle ([4166a6d](https://github.com/strausmann/mcp-dockhand/commit/4166a6d9d7b7508ac989726666ce10d32c501302))
+
+### Bug Fixes
+
+* **release:** migrate presetConfig.types hidden-Feld zu effect (ccc@10) ([40f0719](https://github.com/strausmann/mcp-dockhand/commit/40f071957ae3f9711d881de5d034cd9c0a58c862))
+* **release:** render changelog on ccc@10 via conventional-changelog-writer@9 override ([6a49c1b](https://github.com/strausmann/mcp-dockhand/commit/6a49c1b387cc4d974c365e80416d85c9d0d47911)), references [#113](https://github.com/strausmann/mcp-dockhand/issues/113) [semantic-release/release-notes-generator#1021](https://github.com/semantic-release/release-notes-generator/issues/1021)
+* **server:** protect founding session from eviction; run DELETE cleanup ([85b3f29](https://github.com/strausmann/mcp-dockhand/commit/85b3f29b134d213767d2a9502ac0eda12b747ef1)), references [#133](https://github.com/strausmann/mcp-dockhand/issues/133)
+* **tools:** align stack, system and favorites API contracts ([#131](https://github.com/strausmann/mcp-dockhand/issues/131)) ([1dc0b31](https://github.com/strausmann/mcp-dockhand/commit/1dc0b3183c1ead878f3261698a0de50bf35e0a8c))
+* **tools:** send pull/build/forceRecreate body from deploy_stack ([#117](https://github.com/strausmann/mcp-dockhand/issues/117)) ([99e42a9](https://github.com/strausmann/mcp-dockhand/commit/99e42a92dd1fae68a7b461a3a0b636271d70cf23))
+
 ## [1.9.1](https://github.com/strausmann/mcp-dockhand/compare/v1.9.0...v1.9.1) (2026-07-19)
 
 ### Bug Fixes

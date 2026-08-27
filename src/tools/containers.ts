@@ -8,16 +8,89 @@ import type { DockhandClient } from '../client/dockhand-client.js';
 import { registerTool, jsonResponse, textResponse } from '../utils/tool-helper.js';
 import { encodePath } from '../utils/encode-path.js';
 
+/**
+ * Keys accepted in `update_container`'s `settings` fallback (#142).
+ *
+ * Source of truth: Finsys/dockhand v1.0.41 (commit 905c4a0).
+ *   - `startAfterUpdate` / `repullImage` are top-level control flags the handler
+ *     destructures out of the request body BEFORE the rest is treated as
+ *     `CreateContainerOptions` (src/routes/api/containers/[id]/update/+server.ts:26
+ *     `const { startAfterUpdate, repullImage, ...options } = body;`).
+ *   - Everything else must match a `CreateContainerOptions` field
+ *     (src/lib/server/docker.ts:1351-1453) exactly, or Dockhand silently drops it
+ *     while still recreating the container (see `createContainer()`, which only
+ *     ever reads named fields off `options` — an unknown key like `command`
+ *     instead of `cmd` is never referenced anywhere and has no effect).
+ *
+ * Update this set when re-validating against a newer Dockhand release
+ * (.claude/skills/dockhand-mcp-dev/references/upstream-validation.md).
+ */
+const UPDATE_CONTAINER_ALLOWED_SETTINGS_KEYS = new Set([
+  // top-level control flags, not part of CreateContainerOptions
+  'startAfterUpdate', 'repullImage',
+  // CreateContainerOptions fields
+  'name', 'image', 'ports', 'volumes', 'volumeBinds', 'env', 'labels', 'cmd',
+  'entrypoint', 'workingDir', 'restartPolicy', 'restartMaxRetries', 'networkMode',
+  'additionalNetworks', 'networks', 'networkAliases', 'networkIpv4Address',
+  'networkIpv6Address', 'networkGwPriority', 'networkConfigs', 'user', 'privileged',
+  'healthcheck', 'memory', 'memoryReservation', 'memorySwap', 'cpuShares', 'cpuQuota',
+  'cpuPeriod', 'nanoCpus', 'capAdd', 'capDrop', 'devices', 'dns', 'dnsSearch',
+  'dnsOptions', 'securityOpt', 'ulimits', 'tty', 'stdinOpen', 'oomKillDisable',
+  'pidsLimit', 'shmSize', 'tmpfs', 'sysctls', 'logDriver', 'logOptions', 'ipcMode',
+  'pidMode', 'utsMode', 'hostname', 'cgroupParent', 'stopSignal', 'init',
+  'stopTimeout', 'macAddress', 'extraHosts', 'deviceRequests', 'runtime',
+  'readonlyRootfs', 'cpusetCpus', 'cpusetMems', 'groupAdd', 'memorySwappiness',
+  'usernsMode', 'domainname',
+]);
+
+/**
+ * Fields accepted by `update_container_runtime`'s in-place update, i.e.
+ * Docker's `POST /containers/{id}/update` — the only Docker API that
+ * changes container properties without recreating the container.
+ *
+ * Source of truth: Finsys/dockhand v1.0.41 (commit 905c4a0),
+ * `IN_PLACE_UPDATE_FIELDS` in src/lib/server/docker.ts:1236-1280. Dockhand
+ * filters the request body against exactly this allowlist server-side and
+ * silently drops anything outside it (not an error) — by design, so a
+ * caller cannot sneak a recreate-only field (image, env, ports, ...)
+ * through this path (src/routes/api/containers/[id]/update-runtime/+server.ts).
+ *
+ * This tool still sends `config` unfiltered (`z.record`) and lets the
+ * server enforce the allowlist (#155 keeps this non-breaking) — this
+ * constant exists only to name the accepted keys in the tool/schema
+ * description below, and to anchor the regression test in
+ * tests/update-container-runtime-fields.test.ts.
+ *
+ * Update this list (and the description strings below) when re-validating
+ * against a newer Dockhand release
+ * (.claude/skills/dockhand-mcp-dev/references/upstream-validation.md).
+ */
+export const UPDATE_CONTAINER_RUNTIME_ACCEPTED_FIELDS = [
+  // Restart policy — the headline use case (dockhand#1153)
+  'RestartPolicy',
+  // CPU
+  'CpuShares', 'CpuPeriod', 'CpuQuota', 'CpuRealtimePeriod', 'CpuRealtimeRuntime',
+  'CpusetCpus', 'CpusetMems', 'NanoCpus',
+  // Memory
+  'Memory', 'MemorySwap', 'MemoryReservation', 'MemorySwappiness', 'KernelMemory',
+  // Block I/O
+  'BlkioWeight', 'BlkioWeightDevice',
+  'BlkioDeviceReadBps', 'BlkioDeviceWriteBps',
+  'BlkioDeviceReadIOps', 'BlkioDeviceWriteIOps',
+  // Misc
+  'PidsLimit',
+] as const;
+
 export function registerContainerTools(server: McpServer, client: DockhandClient): void {
 
-  registerTool(server, 'list_containers', 'List all containers in a Dockhand environment, returning summary fields for every container; use `get_container` for a single container\'s details or `inspect_container` for the full low-level Docker JSON.',
+  registerTool(server, 'list_containers',
     { environmentId: z.number().describe('Environment ID (required)') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get('/api/containers', { env: environmentId }));
     }
   );
 
-  registerTool(server, 'get_container', 'Retrieve the Dockhand summary record for a single container by ID, including status and image fields; use `inspect_container` for the full raw Docker-inspect JSON or `list_containers` to enumerate all containers.',
+  registerTool(server, 'get_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -27,7 +100,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'inspect_container', 'Return the full Docker-inspect JSON for a container (mounts, network settings, host config, and all low-level fields); contrast with `get_container` which returns only the Dockhand summary, or `get_container_stats` for live CPU and memory metrics.',
+  registerTool(server, 'inspect_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -37,7 +110,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'get_container_logs', 'Fetch the stdout/stderr log tail from a single container, controlled by the optional `tail` line count; use `get_merged_logs` to interleave logs from multiple containers, or `get_container_top` to see the live process list instead.',
+  registerTool(server, 'get_container_logs',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -52,7 +125,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'get_container_stats', 'Retrieve live CPU, memory, network I/O, and block I/O resource statistics for a single container; use `get_containers_stats` to get an aggregated snapshot across all containers, or `inspect_container` for full Docker-inspect data.',
+  registerTool(server, 'get_container_stats',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -62,7 +135,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'get_container_top', 'Return the live process table (like `docker top`) for a single container, showing PIDs, CPU, and command lines; use `get_container_stats` for resource metrics or `get_container_logs` for log output.',
+  registerTool(server, 'get_container_top',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -72,7 +145,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'start_container', 'Start a stopped or created container, resuming it from its current state; pair with `stop_container` to stop it again, or use `restart_container` to stop and start in one call.',
+  registerTool(server, 'start_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -82,7 +155,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'stop_container', 'Stop a running container by sending SIGTERM followed by SIGKILL after a grace period; use `start_container` to restart it, `pause_container` to freeze without stopping, or `restart_container` to stop and start in one call.',
+  registerTool(server, 'stop_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -92,7 +165,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'restart_container', 'Restart a container by stopping it and then starting it again in a single operation; use `stop_container` / `start_container` separately for finer control, or `pause_container` / `unpause_container` for a non-destructive freeze.',
+  registerTool(server, 'restart_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -102,7 +175,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'pause_container', 'Freeze all processes in a running container using cgroups freezer without stopping it; use `unpause_container` to resume, or `stop_container` to fully stop instead.',
+  registerTool(server, 'pause_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -112,7 +185,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'unpause_container', 'Resume all processes in a container that was frozen by `pause_container`, restoring it to the running state; use `start_container` if the container was stopped rather than paused.',
+  registerTool(server, 'unpause_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -122,7 +195,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'rename_container', 'Rename an existing container to a new name without recreating it; use `update_container` to change settings such as image or restart policy, or `create_container` to provision a new container from scratch.',
+  registerTool(server, 'rename_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -133,18 +206,57 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'update_container', 'Recreate a single container with updated settings (image, environment, restart policy, etc.) for a specific container ID; use `batch_update_containers` to pull the latest image for multiple containers at once, or `rename_container` to change only the container name.',
+  registerTool(server, 'update_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
-      settings: z.record(z.string(), z.unknown()).optional().describe('Container settings to update'),
+      image: z.string().optional().describe('Docker image (e.g. nginx:alpine)'),
+      cmd: z.array(z.string()).optional().describe('Command to run, overriding the image default (e.g. ["sleep", "7200"])'),
+      entrypoint: z.array(z.string()).optional().describe('Entrypoint override'),
+      env: z.array(z.string()).optional().describe('Environment variables (KEY=VALUE format)'),
+      labels: z.record(z.string(), z.string()).optional().describe('Container labels'),
+      restartPolicy: z.string().optional().describe('Restart policy (e.g. unless-stopped)'),
+      networkMode: z.string().optional().describe('Network mode'),
+      workingDir: z.string().optional().describe('Working directory inside the container'),
+      startAfterUpdate: z.boolean().optional().describe('Start the recreated container after updating'),
+      settings: z.record(z.string(), z.unknown()).optional().describe('Additional CreateContainerOptions fields not covered above (e.g. ports, volumeBinds, healthcheck, memory, capAdd, repullImage); merged underneath the explicit parameters, unrecognized keys are rejected'),
     },
-    async ({ environmentId, containerId, settings }) => {
-      return jsonResponse(await client.post(`/api/containers/${encodePath(containerId)}/update`, settings, { env: environmentId }));
+    async ({ environmentId, containerId, image, cmd, entrypoint, env: envVars, labels, restartPolicy, networkMode, workingDir, startAfterUpdate, settings }) => {
+      if (settings) {
+        const unknownKeys = Object.keys(settings).filter((key) => !UPDATE_CONTAINER_ALLOWED_SETTINGS_KEYS.has(key));
+        if (unknownKeys.length > 0) {
+          throw new Error(
+            `update_container: settings contains unrecognized key(s): ${unknownKeys.join(', ')}. ` +
+            'Dockhand silently drops fields that do not match its CreateContainerOptions field names ' +
+            'while still recreating the container — double-check the field name (e.g. "cmd", not "command").'
+          );
+        }
+      }
+
+      const body: Record<string, unknown> = {};
+      if (settings) Object.assign(body, settings);
+      if (image !== undefined) body.image = image;
+      if (cmd !== undefined) body.cmd = cmd;
+      if (entrypoint !== undefined) body.entrypoint = entrypoint;
+      if (envVars !== undefined) body.env = envVars;
+      if (labels !== undefined) body.labels = labels;
+      if (restartPolicy !== undefined) body.restartPolicy = restartPolicy;
+      if (networkMode !== undefined) body.networkMode = networkMode;
+      if (workingDir !== undefined) body.workingDir = workingDir;
+      if (startAfterUpdate !== undefined) body.startAfterUpdate = startAfterUpdate;
+
+      if (Object.keys(body).length === 0) {
+        throw new Error(
+          'update_container requires at least one field to update (e.g. image, cmd, restartPolicy, ' +
+          'or settings) — Dockhand always recreates the container and has no meaningful no-argument update.'
+        );
+      }
+
+      return jsonResponse(await client.post(`/api/containers/${encodePath(containerId)}/update`, body, { env: environmentId }));
     }
   );
 
-  registerTool(server, 'create_container', 'Create a new standalone container directly without a Compose file, accepting image, ports, volumes, environment variables, and restart policy; use `start_container` afterwards to start it, or `update_container` to modify an existing container.',
+  registerTool(server, 'create_container',
     {
       environmentId: z.number().describe('Environment ID'),
       name: z.string().describe('Container name'),
@@ -173,7 +285,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'get_container_shells', 'Enumerate the shell executables available inside a container (e.g., bash, sh, ash) that can be used to open an interactive terminal; complement with `get_container_top` to inspect running processes or `get_container_logs` to read log output.',
+  registerTool(server, 'get_container_shells',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -185,7 +297,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
 
   // --- Container Files ---
 
-  registerTool(server, 'list_container_files', 'List the files and directories inside a container at a given path, defaulting to /; use `get_container_file_content` to read a file\'s content, `create_container_file` to write a new file, or `download_container_file` to retrieve a file as base64.',
+  registerTool(server, 'list_container_files',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -199,7 +311,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'get_container_file_content', 'Read and return the text content of a file at the specified path inside a container; use `list_container_files` to browse the directory tree first, `create_container_file` to write a file, or `download_container_file` for binary files returned as base64.',
+  registerTool(server, 'get_container_file_content',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -214,19 +326,19 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'create_container_file', 'Write a new file with the supplied content at the specified path inside a container; use `get_container_file_content` to read an existing file before overwriting, `delete_container_file` to remove a file, or `upload_container_file` to upload binary content.',
+  registerTool(server, 'create_container_file',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
-      path: z.string().describe('File path inside container'),
-      content: z.string().describe('File content'),
+      path: z.string().describe('File or directory path inside container'),
+      type: z.enum(['file', 'directory']).describe('Whether to create an empty file or a directory (required by the real endpoint)'),
     },
-    async ({ environmentId, containerId, path, content }) => {
-      return jsonResponse(await client.post(`/api/containers/${encodePath(containerId)}/files/create`, { path, content }, { env: environmentId }));
+    async ({ environmentId, containerId, path, type }) => {
+      return jsonResponse(await client.post(`/api/containers/${encodePath(containerId)}/files/create`, { path, type }, { env: environmentId }));
     }
   );
 
-  registerTool(server, 'delete_container_file', 'Permanently delete a file at the specified path inside a container; use `list_container_files` to confirm the path first, `create_container_file` to recreate it if needed, or `rename_container_file` to move instead of delete.',
+  registerTool(server, 'delete_container_file',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -237,7 +349,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'rename_container_file', 'Rename or move a file inside a container by supplying the old and new paths; use `list_container_files` to browse paths, `chmod_container_file` to change permissions, or `delete_container_file` to remove a file entirely.',
+  registerTool(server, 'rename_container_file',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -249,7 +361,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'chmod_container_file', 'Change the permission mode (e.g., 0755) of a file inside a container; use `list_container_files` to locate the file, `rename_container_file` to move it, or `get_container_file_content` to inspect its content.',
+  registerTool(server, 'chmod_container_file',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -263,7 +375,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
 
   // --- Container File Download / Upload ---
 
-  registerTool(server, 'download_container_file', 'Download a file from a container as base64-encoded data (the API returns a tar archive that is decoded automatically); use `get_container_file_content` for plain-text files, `upload_container_file` to send a file into the container, or `list_container_files` to browse available paths.',
+  registerTool(server, 'download_container_file',
     {
       environmentId: z.number().describe('Environment ID (required)'),
       containerId: z.string().describe('Container ID or name'),
@@ -280,7 +392,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
 
   // Fix #30 (HIGH): Add encoding parameter for binary file support (PR #23).
   // When encoding is 'base64', content is decoded from base64 before upload.
-  registerTool(server, 'upload_container_file', 'Upload a file into a container as multipart form data; for binary files pass content as base64 and set encoding to "base64". Use `download_container_file` to retrieve a file from the container, `create_container_file` to write plain-text content directly, or `list_container_files` to confirm the target path.',
+  registerTool(server, 'upload_container_file',
     {
       environmentId: z.number().describe('Environment ID (required)'),
       containerId: z.string().describe('Container ID or name'),
@@ -303,21 +415,21 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
 
   // --- Global container endpoints ---
 
-  registerTool(server, 'check_container_updates', 'Probe the registry now to check all containers for newer image versions and populate the update-detection cache; after this call, use `get_pending_updates` to retrieve the discovered list. For per-container policy, see `get_container_auto_update` and `set_container_auto_update`; for environment-wide defaults, see `get_auto_update_settings`.',
+  registerTool(server, 'check_container_updates',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.post('/api/containers/check-updates', undefined, { env: environmentId }));
     }
   );
 
-  registerTool(server, 'get_pending_updates', 'Retrieve the cached list of containers already discovered to have newer images available, without hitting the registry again; call `check_container_updates` first to refresh this cache. To read or change per-container auto-update policy, use `get_container_auto_update` and `set_container_auto_update`; for environment-wide defaults, see `get_auto_update_settings`.',
+  registerTool(server, 'get_pending_updates',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get('/api/containers/pending-updates', { env: environmentId }));
     }
   );
 
-  registerTool(server, 'batch_update_containers', 'Pull the latest images and recreate multiple containers in one operation by supplying an array of container IDs; contrast with `update_container` which targets a single container ID. Use `check_container_updates` to discover which containers have newer images, or `list_batch_operations` to review pending batch history.',
+  registerTool(server, 'batch_update_containers',
     {
       environmentId: z.number().describe('Environment ID'),
       containerIds: z.array(z.string()).describe('Array of container IDs to update'),
@@ -327,14 +439,14 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'get_container_sizes', 'Return the on-disk size for all containers in an environment, covering both the read-write layer and virtual image size; use `get_container_stats` for live CPU and memory usage of a single container, or `get_containers_stats` for aggregated runtime stats across all containers.',
+  registerTool(server, 'get_container_sizes',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get('/api/containers/sizes', { env: environmentId }));
     }
   );
 
-  registerTool(server, 'get_containers_stats', 'Return aggregated CPU, memory, and I/O stats across all containers in an environment in one call; use `get_container_stats` to get detailed metrics for a single container, or `get_container_sizes` for on-disk size data.',
+  registerTool(server, 'get_containers_stats',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get('/api/containers/stats', { env: environmentId }));
@@ -343,7 +455,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
 
   // --- Destructive / advanced ops ---
 
-  registerTool(server, 'delete_container', 'Permanently delete a container (optionally force-killing it first); contrast with `stop_container` which leaves the container around for inspection. Use `list_containers` to find the ID first; for batch removal across multiple containers, see `batch_update_containers` (recreate cycle).',
+  registerTool(server, 'delete_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID to delete'),
@@ -356,25 +468,22 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'exec_container', 'Execute a one-shot command inside a running container and return its output (similar to `docker exec`); pair with `get_container_shells` to discover available shells, or `get_container_logs` if you only need to inspect already-emitted output rather than run something new.',
+  registerTool(server, 'exec_container',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
-      command: z.array(z.string()).describe('Command as argv array (e.g. ["sh", "-c", "ls /app"])'),
-      workingDir: z.string().optional().describe('Working directory inside the container'),
+      shell: z.string().optional().describe('Shell executable to exec into (default: /bin/sh); see `get_container_shells` for what is available'),
       user: z.string().optional().describe('User to exec as (e.g. "root" or "1000:1000")'),
-      tty: z.boolean().optional().describe('Allocate a TTY'),
     },
-    async ({ environmentId, containerId, command, workingDir, user, tty }) => {
-      const body: Record<string, unknown> = { command };
-      if (workingDir) body.workingDir = workingDir;
+    async ({ environmentId, containerId, shell, user }) => {
+      const body: Record<string, unknown> = {};
+      if (shell) body.shell = shell;
       if (user) body.user = user;
-      if (tty !== undefined) body.tty = tty;
       return jsonResponse(await client.post(`/api/containers/${encodePath(containerId)}/exec`, body, { envId: environmentId }));
     }
   );
 
-  registerTool(server, 'write_container_file_content', 'Overwrite or create a file inside a container with plain-text content via PUT (idempotent compared to `create_container_file` which uses POST and may fail if the file exists). Use `get_container_file_content` to read the file back, `upload_container_file` for binary content, or `delete_container_file` to remove it.',
+  registerTool(server, 'write_container_file_content',
     {
       environmentId: z.number().describe('Environment ID'),
       containerId: z.string().describe('Container ID'),
@@ -386,7 +495,7 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'batch_update_containers_stream', 'Streaming variant of `batch_update_containers` — pulls latest images and recreates multiple containers while emitting progress events via Server-Sent Events; use this when you want incremental log output, otherwise `batch_update_containers` returns the same result without the stream. Discover candidates first via `check_container_updates` and `get_pending_updates`.',
+  registerTool(server, 'batch_update_containers_stream',
     {
       environmentId: z.number().describe('Environment ID'),
       containerIds: z.array(z.string()).describe('Array of container IDs to update'),
@@ -396,25 +505,25 @@ export function registerContainerTools(server: McpServer, client: DockhandClient
     }
   );
 
-  registerTool(server, 'clear_pending_updates', 'Permanently clear the cached pending-updates list for an environment, forcing the next `check_container_updates` call to re-probe the registry from scratch; use `get_pending_updates` to inspect the cache before clearing.',
+  registerTool(server, 'clear_pending_updates',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.delete('/api/containers/pending-updates', { env: environmentId }));
     }
   );
 
-  registerTool(server, 'update_container_runtime', 'Update the runtime configuration (e.g. resource limits, restart policy) of an existing container in place; for image or environment changes use `update_container`, and for lifecycle actions see `restart_container`.',
+  registerTool(server, 'update_container_runtime',
     {
       containerId: z.string().describe('Container ID or name'),
       environmentId: z.number().describe('Environment ID'),
-      config: z.record(z.string(), z.unknown()).describe('Runtime configuration to apply'),
+      config: z.record(z.string(), z.unknown()).describe('Runtime configuration to apply. Accepted keys (Docker in-place update allowlist): RestartPolicy, CpuShares, CpuPeriod, CpuQuota, CpuRealtimePeriod, CpuRealtimeRuntime, CpusetCpus, CpusetMems, NanoCpus, Memory, MemorySwap, MemoryReservation, MemorySwappiness, KernelMemory, BlkioWeight, BlkioWeightDevice, BlkioDeviceReadBps, BlkioDeviceWriteBps, BlkioDeviceReadIOps, BlkioDeviceWriteIOps, PidsLimit. Any other key is silently ignored by the server, not an error.'),
     },
     async ({ containerId, environmentId, config }) => {
       return jsonResponse(await client.post(`/api/containers/${encodePath(containerId)}/update-runtime`, config, { env: environmentId }));
     }
   );
 
-  registerTool(server, 'get_container_update_check', 'Read the current image-update-check result for containers without re-probing the registry; run `check_container_updates` to refresh it or `get_pending_updates` for the pending list.',
+  registerTool(server, 'get_container_update_check',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get('/api/containers/check-updates', { env: environmentId }));

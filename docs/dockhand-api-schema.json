@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-07-25T07:11:25.751Z",
+  "generatedAt": "2026-08-27T16:02:46.404Z",
   "sourceRepo": "finsys/dockhand",
-  "sourceCommit": "123e04d17f5378a342d3bb6188ccfae2d6006145",
-  "endpointCount": 229,
+  "sourceCommit": "a9b1998aad9549aa9ac0a1e44f438f809283f101",
+  "endpointCount": 254,
   "endpoints": [
     {
       "path": "/api/activity",
@@ -10,26 +10,60 @@
         "DELETE",
         "GET"
       ],
-      "queryParams": [
-        "actions",
-        "containerId",
-        "containerName",
-        "environmentId",
-        "fromDate",
-        "labels",
-        "limit",
-        "offset",
-        "toDate"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "actions",
+            "required": false
+          },
+          {
+            "name": "containerId",
+            "required": false
+          },
+          {
+            "name": "containerName",
+            "required": false
+          },
+          {
+            "name": "environmentId",
+            "required": false
+          },
+          {
+            "name": "fromDate",
+            "required": false
+          },
+          {
+            "name": "labels",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "required": false
+          },
+          {
+            "name": "offset",
+            "required": false
+          },
+          {
+            "name": "toDate",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/activity/containers",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "environment_id"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "environment_id",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/activity/events",
@@ -42,29 +76,72 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "environment_id"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "environment_id",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/audit",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "action",
-        "actions",
-        "entityType",
-        "entityTypes",
-        "environmentId",
-        "fromDate",
-        "labels",
-        "limit",
-        "offset",
-        "toDate",
-        "username",
-        "usernames"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "action",
+            "required": false
+          },
+          {
+            "name": "actions",
+            "required": false
+          },
+          {
+            "name": "entityType",
+            "required": false
+          },
+          {
+            "name": "entityTypes",
+            "required": false
+          },
+          {
+            "name": "environmentId",
+            "required": false
+          },
+          {
+            "name": "fromDate",
+            "required": false
+          },
+          {
+            "name": "labels",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "required": false
+          },
+          {
+            "name": "offset",
+            "required": false
+          },
+          {
+            "name": "toDate",
+            "required": false
+          },
+          {
+            "name": "username",
+            "required": false
+          },
+          {
+            "name": "usernames",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/audit/events",
@@ -77,15 +154,38 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "action",
-        "entityType",
-        "environmentId",
-        "format",
-        "fromDate",
-        "toDate",
-        "username"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "action",
+            "required": false
+          },
+          {
+            "name": "entityType",
+            "required": false
+          },
+          {
+            "name": "environmentId",
+            "required": false
+          },
+          {
+            "name": "format",
+            "required": false
+          },
+          {
+            "name": "fromDate",
+            "required": false
+          },
+          {
+            "name": "toDate",
+            "required": false
+          },
+          {
+            "name": "username",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/audit/users",
@@ -159,9 +259,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "redirect"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "redirect",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/auth/oidc/{id}/test",
@@ -177,12 +282,26 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "code",
-        "error",
-        "error_description",
-        "state"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "code",
+            "required": false
+          },
+          {
+            "name": "error",
+            "required": false
+          },
+          {
+            "name": "error_description",
+            "required": false
+          },
+          {
+            "name": "state",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/auth/providers",
@@ -242,10 +361,18 @@
         "GET",
         "POST"
       ],
-      "queryParams": [
-        "target",
-        "type"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "target",
+            "required": false
+          },
+          {
+            "name": "type",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/backup/configs/{id}",
@@ -346,6 +473,12 @@
       ]
     },
     {
+      "path": "/api/backup/instance",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
       "path": "/api/backup/restore",
       "methods": [
         "POST"
@@ -368,11 +501,22 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "allDestinations",
-        "configId",
-        "destinationId"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "allDestinations",
+            "required": false
+          },
+          {
+            "name": "configId",
+            "required": false
+          },
+          {
+            "name": "destinationId",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/backup/snapshots/{id}",
@@ -382,9 +526,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "destinationId"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "destinationId",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/backup/snapshots/{id}/browse",
@@ -394,10 +543,18 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "destinationId",
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "destinationId",
+            "required": true
+          },
+          {
+            "name": "path",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/backup/snapshots/{id}/dump",
@@ -406,12 +563,6 @@
       ],
       "pathParams": [
         "id"
-      ],
-      "queryParams": [
-        "destinationId",
-        "download",
-        "path",
-        "type"
       ]
     },
     {
@@ -422,20 +573,64 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "destinationId"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "destinationId",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/backup/snapshots/diff",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "destinationId",
-        "snapshotA",
-        "snapshotB"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "destinationId",
+            "required": true
+          },
+          {
+            "name": "snapshotA",
+            "required": true
+          },
+          {
+            "name": "snapshotB",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "path": "/api/backup/stack-dir-listing",
+      "methods": [
+        "GET"
+      ],
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "target",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "path": "/api/backup/stack-path",
+      "methods": [
+        "GET"
+      ],
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "target",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/batch",
@@ -468,14 +663,36 @@
       ]
     },
     {
+      "path": "/api/container-icons",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/container-icons/{name}",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "pathParams": [
+        "name"
+      ]
+    },
+    {
       "path": "/api/containers",
       "methods": [
         "GET",
         "POST"
       ],
-      "queryParams": [
-        "all"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "all",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}",
@@ -486,8 +703,22 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "force"
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "force",
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "path": "/api/containers/{id}/compose",
+      "methods": [
+        "GET"
+      ],
+      "pathParams": [
+        "id"
       ]
     },
     {
@@ -498,9 +729,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "envId"
-      ]
+      "queryParamsByMethod": {
+        "POST": [
+          {
+            "name": "envId",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}/files",
@@ -510,10 +746,18 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "path",
-        "simpleLs"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "path",
+            "required": false
+          },
+          {
+            "name": "simpleLs",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}/files/chmod",
@@ -533,9 +777,20 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "path",
+            "required": true
+          }
+        ],
+        "PUT": [
+          {
+            "name": "path",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}/files/create",
@@ -554,9 +809,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "path",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}/files/download",
@@ -566,10 +826,18 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "format",
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "format",
+            "required": false
+          },
+          {
+            "name": "path",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}/files/rename",
@@ -588,9 +856,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "POST": [
+          {
+            "name": "path",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}/inspect",
@@ -609,11 +882,22 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "since",
-        "tail",
-        "until"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "since",
+            "required": false
+          },
+          {
+            "name": "tail",
+            "required": false
+          },
+          {
+            "name": "until",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}/logs/stream",
@@ -623,11 +907,22 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "since",
-        "tail",
-        "until"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "since",
+            "required": false
+          },
+          {
+            "name": "tail",
+            "required": false
+          },
+          {
+            "name": "until",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/{id}/pause",
@@ -729,6 +1024,23 @@
       ]
     },
     {
+      "path": "/api/containers/{id}/version-notes",
+      "methods": [
+        "GET"
+      ],
+      "pathParams": [
+        "id"
+      ],
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "versions",
+            "required": false
+          }
+        ]
+      }
+    },
+    {
       "path": "/api/containers/batch-update",
       "methods": [
         "POST"
@@ -753,9 +1065,14 @@
         "DELETE",
         "GET"
       ],
-      "queryParams": [
-        "containerId"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "containerId",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/sizes",
@@ -768,9 +1085,14 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "debug"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "debug",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/containers/stats/stream",
@@ -802,12 +1124,23 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "gc"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "gc",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/dependencies",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/docs",
       "methods": [
         "GET"
       ]
@@ -885,6 +1218,16 @@
       ]
     },
     {
+      "path": "/api/environments/{id}/remote-stacks-dir",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "pathParams": [
+        "id"
+      ]
+    },
+    {
       "path": "/api/environments/{id}/test",
       "methods": [
         "POST"
@@ -929,6 +1272,12 @@
       "path": "/api/events",
       "methods": [
         "GET"
+      ]
+    },
+    {
+      "path": "/api/git/branches",
+      "methods": [
+        "POST"
       ]
     },
     {
@@ -1080,9 +1429,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "secret"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "secret",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/git/webhook/{id}",
@@ -1093,9 +1447,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "secret"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "secret",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/hawser/connect",
@@ -1111,9 +1470,14 @@
         "GET",
         "POST"
       ],
-      "queryParams": [
-        "id"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/health",
@@ -1134,6 +1498,27 @@
       ]
     },
     {
+      "path": "/api/icons/selfhst-manifest",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/icons/selfhst/{ref}",
+      "methods": [
+        "GET"
+      ],
+      "pathParams": [
+        "ref"
+      ]
+    },
+    {
+      "path": "/api/icons/selfhst/batch",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
       "path": "/api/images",
       "methods": [
         "GET"
@@ -1147,9 +1532,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "force"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "force",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/images/{id}/export",
@@ -1159,9 +1549,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "compress"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "compress",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/images/{id}/history",
@@ -1182,6 +1577,12 @@
       ]
     },
     {
+      "path": "/api/images/load",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
       "path": "/api/images/pull",
       "methods": [
         "POST"
@@ -1199,21 +1600,40 @@
         "GET",
         "POST"
       ],
-      "queryParams": [
-        "image",
-        "scanner"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "image",
+            "required": true
+          },
+          {
+            "name": "scanner",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/images/scan/export",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "format",
-        "image",
-        "imageId"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "format",
+            "required": false
+          },
+          {
+            "name": "image",
+            "required": false
+          },
+          {
+            "name": "imageId",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/jobs/{id}",
@@ -1237,18 +1657,28 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "format"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "format",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/legal/privacy",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "format"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "format",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/license",
@@ -1263,12 +1693,26 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "containers",
-        "since",
-        "tail",
-        "until"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "containers",
+            "required": false
+          },
+          {
+            "name": "since",
+            "required": false
+          },
+          {
+            "name": "tail",
+            "required": false
+          },
+          {
+            "name": "until",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/networks",
@@ -1375,9 +1819,14 @@
         "GET",
         "POST"
       ],
-      "queryParams": [
-        "gridId"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "gridId",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/preferences/sidebar",
@@ -1425,9 +1874,14 @@
       "methods": [
         "POST"
       ],
-      "queryParams": [
-        "dangling"
-      ]
+      "queryParamsByMethod": {
+        "POST": [
+          {
+            "name": "dangling",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/prune/networks",
@@ -1479,44 +1933,110 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "last",
-        "registry"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "last",
+            "required": false
+          },
+          {
+            "name": "registry",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/registry/image",
       "methods": [
         "DELETE"
       ],
-      "queryParams": [
-        "image",
-        "registry",
-        "tag"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "image",
+            "required": true
+          },
+          {
+            "name": "registry",
+            "required": true
+          },
+          {
+            "name": "tag",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/registry/search",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "limit",
-        "registry",
-        "term"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "limit",
+            "required": false
+          },
+          {
+            "name": "registry",
+            "required": false
+          },
+          {
+            "name": "term",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "path": "/api/registry/tag-info",
+      "methods": [
+        "GET"
+      ],
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "image",
+            "required": true
+          },
+          {
+            "name": "registry",
+            "required": false
+          },
+          {
+            "name": "tag",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/registry/tags",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "image",
-        "page",
-        "pageSize",
-        "registry"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "image",
+            "required": true
+          },
+          {
+            "name": "page",
+            "required": false
+          },
+          {
+            "name": "pageSize",
+            "required": false
+          },
+          {
+            "name": "registry",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/roles",
@@ -1577,18 +2097,50 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "environmentId",
-        "fromDate",
-        "limit",
-        "offset",
-        "scheduleId",
-        "scheduleType",
-        "status",
-        "statuses",
-        "toDate",
-        "triggeredBy"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "environmentId",
+            "required": false
+          },
+          {
+            "name": "fromDate",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "required": false
+          },
+          {
+            "name": "offset",
+            "required": false
+          },
+          {
+            "name": "scheduleId",
+            "required": false
+          },
+          {
+            "name": "scheduleType",
+            "required": false
+          },
+          {
+            "name": "status",
+            "required": false
+          },
+          {
+            "name": "statuses",
+            "required": false
+          },
+          {
+            "name": "toDate",
+            "required": false
+          },
+          {
+            "name": "triggeredBy",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/schedules/executions/{id}",
@@ -1623,6 +2175,48 @@
       ]
     },
     {
+      "path": "/api/secret-providers",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/secret-providers/{id}",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ],
+      "pathParams": [
+        "id"
+      ]
+    },
+    {
+      "path": "/api/secret-providers/{id}/probe",
+      "methods": [
+        "POST"
+      ],
+      "pathParams": [
+        "id"
+      ]
+    },
+    {
+      "path": "/api/secret-providers/{id}/test",
+      "methods": [
+        "POST"
+      ],
+      "pathParams": [
+        "id"
+      ]
+    },
+    {
+      "path": "/api/secret-providers/test",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
       "path": "/api/self-update",
       "methods": [
         "POST"
@@ -1639,9 +2233,14 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "id"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/settings/general",
@@ -1651,23 +2250,61 @@
       ]
     },
     {
+      "path": "/api/settings/navigation",
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "queryParamsByMethod": {
+        "PUT": [
+          {
+            "name": "scope",
+            "required": false
+          }
+        ]
+      }
+    },
+    {
       "path": "/api/settings/scanner",
       "methods": [
         "DELETE",
         "GET",
         "POST"
       ],
-      "queryParams": [
-        "checkUpdates",
-        "removeImages",
-        "scanner",
-        "settingsOnly"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "checkUpdates",
+            "required": false
+          },
+          {
+            "name": "settingsOnly",
+            "required": false
+          }
+        ],
+        "DELETE": [
+          {
+            "name": "removeImages",
+            "required": true
+          },
+          {
+            "name": "scanner",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/settings/scanner/cache",
       "methods": [
         "DELETE"
+      ]
+    },
+    {
+      "path": "/api/settings/semver",
+      "methods": [
+        "GET",
+        "POST"
       ]
     },
     {
@@ -1691,10 +2328,22 @@
       "pathParams": [
         "name"
       ],
-      "queryParams": [
-        "force",
-        "volumes"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "files",
+            "required": false
+          },
+          {
+            "name": "force",
+            "required": false
+          },
+          {
+            "name": "volumes",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/stacks/{name}/check-path-change",
@@ -1710,6 +2359,15 @@
       "methods": [
         "GET",
         "PUT"
+      ],
+      "pathParams": [
+        "name"
+      ]
+    },
+    {
+      "path": "/api/stacks/{name}/delete-preview",
+      "methods": [
+        "GET"
       ],
       "pathParams": [
         "name"
@@ -1763,6 +2421,17 @@
       ]
     },
     {
+      "path": "/api/stacks/{name}/icon",
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "pathParams": [
+        "name"
+      ]
+    },
+    {
       "path": "/api/stacks/{name}/relocate",
       "methods": [
         "POST"
@@ -1779,9 +2448,14 @@
       "pathParams": [
         "name"
       ],
-      "queryParams": [
-        "mode"
-      ]
+      "queryParamsByMethod": {
+        "POST": [
+          {
+            "name": "mode",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/stacks/{name}/start",
@@ -1794,6 +2468,15 @@
     },
     {
       "path": "/api/stacks/{name}/stop",
+      "methods": [
+        "POST"
+      ],
+      "pathParams": [
+        "name"
+      ]
+    },
+    {
+      "path": "/api/stacks/{name}/validate",
       "methods": [
         "POST"
       ],
@@ -1818,19 +2501,32 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "location",
-        "name"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "location",
+            "required": false
+          },
+          {
+            "name": "name",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/stacks/path-hints",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "name"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "name",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/stacks/scan",
@@ -1868,18 +2564,28 @@
         "GET",
         "POST"
       ],
-      "queryParams": [
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "path",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/system/files/content",
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "path",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/templates",
@@ -1901,9 +2607,14 @@
         "POST",
         "PUT"
       ],
-      "queryParams": [
-        "id"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/users",
@@ -1922,9 +2633,14 @@
       "pathParams": [
         "id"
       ],
-      "queryParams": [
-        "confirmDisableAuth"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "confirmDisableAuth",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/users/{id}/mfa",
@@ -1963,9 +2679,14 @@
       "pathParams": [
         "name"
       ],
-      "queryParams": [
-        "force"
-      ]
+      "queryParamsByMethod": {
+        "DELETE": [
+          {
+            "name": "force",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/volumes/{name}/browse",
@@ -1975,9 +2696,14 @@
       "pathParams": [
         "name"
       ],
-      "queryParams": [
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "path",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/volumes/{name}/browse/content",
@@ -1987,9 +2713,14 @@
       "pathParams": [
         "name"
       ],
-      "queryParams": [
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "path",
+            "required": true
+          }
+        ]
+      }
     },
     {
       "path": "/api/volumes/{name}/browse/release",
@@ -2017,10 +2748,18 @@
       "pathParams": [
         "name"
       ],
-      "queryParams": [
-        "format",
-        "path"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "format",
+            "required": false
+          },
+          {
+            "name": "path",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/volumes/{name}/inspect",
@@ -2048,9 +2787,14 @@
       "methods": [
         "GET"
       ],
-      "queryParams": [
-        "format"
-      ]
+      "queryParamsByMethod": {
+        "GET": [
+          {
+            "name": "format",
+            "required": false
+          }
+        ]
+      }
     },
     {
       "path": "/api/vulnerabilities/scan-all",

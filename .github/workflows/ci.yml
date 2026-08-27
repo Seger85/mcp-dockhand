@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -29,11 +29,39 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Type check tests
+        run: npm run typecheck:tests
+
       - name: Run tests
         run: npm test
 
       - name: Build
         run: npm run build
+
+      # Derived documents must match the code in the same commit. `docs/coverage.md` and
+      # `src/openapi/tool-endpoint-map.ts` are generated from the tool registrations plus the
+      # committed OpenAPI spec, but until now nothing checked them on a PR — they were only
+      # refreshed by the nightly api-schema-sync run. Adding eight tools in #201 therefore
+      # left docs/coverage.md advertising them as MISSING_TOOL, and a release cut before the
+      # next nightly would have shipped that. Both generators are no-op-safe when nothing
+      # changed, so regenerating and diffing is a clean gate.
+      #
+      # If this fails: run `npm run api:coverage-doc`, `npm run api:tool-endpoint-map` and
+      # `node scripts/generate-body-contract-doc.mjs`, then commit the result.
+      #
+      # NOT gated here: docs/dockhand-api-schema.json. Its generator (`npm run api:extract`)
+      # talks to a LIVE Dockhand instance, which CI has no access to — gating it would fail
+      # for a reason that is not a defect, and a gate that goes red without a defect is one
+      # people learn to ignore. It stays with the nightly api-schema-sync run.
+      - name: Derived docs are in sync with the code
+        run: |
+          npm run api:coverage-doc
+          npm run api:tool-endpoint-map
+          node scripts/generate-body-contract-doc.mjs
+          git diff --exit-code -- \
+            docs/coverage.md \
+            src/openapi/tool-endpoint-map.ts \
+            docs/body-contract-report.md
 
   docker:
     runs-on: ubuntu-latest
@@ -72,3 +100,13 @@ jobs:
 
       - name: npm ci in production image (node:22-alpine)
         run: docker run --rm -v "$PWD":/app -w /app node:22-alpine npm ci --no-audit --no-fund
+
+  lint:
+    # ESLint itself is not installed from this repo's devDependencies -- see
+    # scripts/lint-in-container.sh for why (TypeScript 7 vs. typescript-eslint).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Lint (containerized, TypeScript 5)
+        run: bash scripts/lint-in-container.sh

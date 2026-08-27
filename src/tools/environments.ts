@@ -9,6 +9,70 @@ import { registerTool, jsonResponse } from '../utils/tool-helper.js';
 import { encodePath } from '../utils/encode-path.js';
 
 /**
+ * Field names on a Dockhand environment payload that a routine lookup must never hand
+ * back (Issue #232):
+ *   - `hawserToken` — the agent token a node uses to register itself over the Dockhand
+ *     WebSocket. Dedicated tools already own issuing/inspecting it (list_hawser_tokens /
+ *     create_hawser_token / revoke_hawser_token, src/tools/auth.ts).
+ *   - `tlsKey` — the decrypted private TLS client key, for `direct`/`hawser-standard`
+ *     environments configured with mutual TLS. The heavier of the two: a private key,
+ *     not a revocable node token.
+ *
+ * Both are decrypted at the data-access layer and land in the row returned to every
+ * caller — verified against the real upstream code (Finsys/dockhand v1.0.44,
+ * src/lib/server/db.ts): getEnvironments()/getEnvironment()/createEnvironment() all
+ * `decrypt(e.tlsKey)` and `decrypt(e.hawserToken)` before returning, and
+ * updateEnvironment() ends by calling getEnvironment() (same decryption). This is NOT a
+ * deliberate response shape: every sibling credential-bearing endpoint (registries,
+ * LDAP, OIDC) explicitly strips its secret before responding in its own route handler
+ * (`const { password, ...safeRegistry } = registry`, a `sanitized` object for LDAP/OIDC
+ * configs) — only the environments routes spread the row as-is. Whoever reads this in a
+ * year: this list is a fix for an oversight, not curation of an endpoint that answers
+ * this way on purpose.
+ *
+ * Deliberately an explicit list, not a heuristic over field names: a pattern like
+ * /token|secret|key/i would also catch a field like `tokenCount`, and a false positive
+ * here silently drops data a caller needs. The trade-off is that this list is NOT
+ * notified when Dockhand adds a new credential field upstream — extend it here if
+ * one more shows up (checked at the time of writing: tlsCa/tlsCert are the public CA
+ * and client certificate, never encrypted/decrypted in db.ts, so they are not secrets
+ * and are intentionally left out).
+ *
+ * Also applied to create_environment/update_environment: verified against the real
+ * upstream handlers (Finsys/dockhand v1.0.44, src/routes/api/environments/+server.ts
+ * and src/routes/api/environments/[id]/+server.ts) that POST and PUT both respond with
+ * `json(env)` / `{ ...env, ... }` — the same full DB row as GET, both fields included.
+ * test_environment and test_environment_connection do NOT need this: both build a
+ * curated `{ success, info, isEdgeMode, hawser: {...} }` object by hand and never
+ * spread the environment row (verified against the same handlers).
+ */
+const ENVIRONMENT_CREDENTIAL_FIELDS = ['hawserToken', 'tlsKey'] as const;
+
+/**
+ * Returns a shallow copy of a single environment object with every field in
+ * ENVIRONMENT_CREDENTIAL_FIELDS removed. Every other field passes through unchanged.
+ * Non-object input (defensive — the Dockhand API is expected to always answer with an
+ * object here) is returned as-is rather than thrown on.
+ */
+function stripEnvironmentCredentials(env: unknown): unknown {
+  if (typeof env !== 'object' || env === null) return env;
+  const copy = { ...(env as Record<string, unknown>) };
+  for (const field of ENVIRONMENT_CREDENTIAL_FIELDS) {
+    delete copy[field];
+  }
+  return copy;
+}
+
+/**
+ * Applies stripEnvironmentCredentials across a list_environments payload (an array of
+ * environment objects). Non-array input is returned as-is, defensively.
+ */
+function stripEnvironmentListCredentials(payload: unknown): unknown {
+  if (!Array.isArray(payload)) return payload;
+  return payload.map(stripEnvironmentCredentials);
+}
+
+/**
  * Resolve host/port from explicit args or a URL string into the request body.
  * Only applies to hawser-standard connections — other types ignore host/port.
  *
@@ -65,21 +129,21 @@ function resolveHostPort(
 
 export function registerEnvironmentTools(server: McpServer, client: DockhandClient): void {
 
-  registerTool(server, 'list_environments', 'List all Dockhand environments (Docker hosts). Use `get_environment` to fetch a single environment, `create_environment` to add one, or `delete_environment` to remove one.',
+  registerTool(server, 'list_environments',
     {},
     async () => {
-      return jsonResponse(await client.get('/api/environments'));
+      return jsonResponse(stripEnvironmentListCredentials(await client.get('/api/environments')));
     }
   );
 
-  registerTool(server, 'get_environment', 'Retrieve full details of a single Dockhand environment by ID. See `list_environments` for all environments, `update_environment` to modify, or `test_environment` to verify connectivity.',
+  registerTool(server, 'get_environment',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
-      return jsonResponse(await client.get(`/api/environments/${encodePath(environmentId)}`));
+      return jsonResponse(stripEnvironmentCredentials(await client.get(`/api/environments/${encodePath(environmentId)}`)));
     }
   );
 
-  registerTool(server, 'create_environment', 'Create a new Dockhand environment (Docker host connection). For hawser-standard mode supply host/port or a URL parsed into host/port; edge mode needs no host. Use `test_environment_connection` to probe connectivity before saving, or `update_environment` to modify later.',
+  registerTool(server, 'create_environment',
     {
       name: z.string().describe('Environment name'),
       connectionType: z.string().describe('Connection type (e.g. hawser-standard, hawser-edge)'),
@@ -90,13 +154,13 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
     async ({ name, connectionType, host, port, url }) => {
       const body: Record<string, unknown> = { name, connectionType };
       resolveHostPort(body, { host, port, url }, connectionType, true);
-      return jsonResponse(await client.post('/api/environments', body));
+      return jsonResponse(stripEnvironmentCredentials(await client.post('/api/environments', body)));
     }
   );
 
   // Fix #30 (HIGH): Accept optional connectionType param to skip redundant GET request.
   // Only fetches environment via GET when connectionType is not provided by the caller.
-  registerTool(server, 'update_environment', 'Update an existing Dockhand environment (name, host, labels, metrics settings, etc.). For hawser-standard, supply host/port or a URL; pass connectionType to avoid an extra GET. See `create_environment` to add one or `delete_environment` to remove one.',
+  registerTool(server, 'update_environment',
     {
       environmentId: z.number().describe('Environment ID'),
       name: z.string().optional().describe('New name'),
@@ -130,25 +194,25 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
       if (highlightChanges !== undefined) body.highlightChanges = highlightChanges;
       if (socketPath !== undefined) body.socketPath = socketPath;
       resolveHostPort(body, { host, port, url }, resolvedConnectionType, false);
-      return jsonResponse(await client.put(`/api/environments/${encodePath(environmentId)}`, body));
+      return jsonResponse(stripEnvironmentCredentials(await client.put(`/api/environments/${encodePath(environmentId)}`, body)));
     }
   );
 
-  registerTool(server, 'delete_environment', 'Permanently delete a Dockhand environment and remove it from Dockhand. This is irreversible — use `get_environment` to confirm the target before deleting, or `list_environments` to review all registered environments.',
+  registerTool(server, 'delete_environment',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.delete(`/api/environments/${encodePath(environmentId)}`));
     }
   );
 
-  registerTool(server, 'test_environment', 'Test Docker connectivity for an already-saved Dockhand environment by ID; validates that the stored connection config still reaches the host. Use `test_environment_connection` instead to probe a connection before saving, or `detect_docker_socket` to auto-discover the local socket.',
+  registerTool(server, 'test_environment',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.post(`/api/environments/${encodePath(environmentId)}/test`));
     }
   );
 
-  registerTool(server, 'test_environment_connection', 'Probe a Docker connection with supplied parameters without saving an environment — useful for validating credentials before calling `create_environment`. For hawser-standard provide host/port or a URL; contrast with `test_environment` which tests an existing saved environment by ID.',
+  registerTool(server, 'test_environment_connection',
     {
       connectionType: z.string().describe('Connection type'),
       host: z.string().optional().describe('Docker host IP or hostname (for hawser-standard mode)'),
@@ -162,21 +226,21 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
     }
   );
 
-  registerTool(server, 'detect_docker_socket', 'Auto-detect the Docker socket path on the Dockhand server — useful when the socket location is unknown before calling `create_environment` or `test_environment_connection`. Returns the discovered socket path for use as socketPath in environment configuration.',
+  registerTool(server, 'detect_docker_socket',
     {},
     async () => {
       return jsonResponse(await client.get('/api/environments/detect-socket'));
     }
   );
 
-  registerTool(server, 'get_environment_timezone', 'Retrieve the configured timezone string for a Dockhand environment. Use `set_environment_timezone` to change it; see also `get_environment_update_check` and `get_environment_image_prune` for other per-environment settings.',
+  registerTool(server, 'get_environment_timezone',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get(`/api/environments/${encodePath(environmentId)}/timezone`));
     }
   );
 
-  registerTool(server, 'set_environment_timezone', 'Configure the timezone for a Dockhand environment (e.g. Europe/Berlin). Use `get_environment_timezone` to read the current value; see also `set_environment_update_check` and `set_environment_image_prune` for related settings.',
+  registerTool(server, 'set_environment_timezone',
     {
       environmentId: z.number().describe('Environment ID'),
       timezone: z.string().describe('Timezone string (e.g. Europe/Berlin)'),
@@ -186,14 +250,31 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
     }
   );
 
-  registerTool(server, 'get_environment_update_check', 'Retrieve the automatic image update-check settings for a Dockhand environment. Use `set_environment_update_check` to change them; see also `get_environment_timezone` and `get_environment_image_prune` for other per-environment settings.',
+  registerTool(server, 'get_environment_remote_stacks_dir',
+    { environmentId: z.number().describe('Environment ID') },
+    async ({ environmentId }) => {
+      return jsonResponse(await client.get(`/api/environments/${encodePath(environmentId)}/remote-stacks-dir`));
+    }
+  );
+
+  registerTool(server, 'set_environment_remote_stacks_dir',
+    {
+      environmentId: z.number().describe('Environment ID'),
+      remoteStacksDir: z.string().nullable().describe('Absolute path on the remote host where Dockhand stages this environment\'s stack files before "docker compose up" — needed for direct (agentless) environments, whose daemon has no shared filesystem with Dockhand so relative bind mounts (./config.yaml) never reach it. Must be an absolute path with no ".." segments. Pass null (or "") to clear the setting and revert to the default behavior.'),
+    },
+    async ({ environmentId, remoteStacksDir }) => {
+      return jsonResponse(await client.post(`/api/environments/${encodePath(environmentId)}/remote-stacks-dir`, { remoteStacksDir }));
+    }
+  );
+
+  registerTool(server, 'get_environment_update_check',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get(`/api/environments/${encodePath(environmentId)}/update-check`));
     }
   );
 
-  registerTool(server, 'set_environment_update_check', 'Configure automatic image update-check settings for a Dockhand environment. Use `get_environment_update_check` to read the current values; see also `set_environment_timezone` and `set_environment_image_prune` for related settings.',
+  registerTool(server, 'set_environment_update_check',
     {
       environmentId: z.number().describe('Environment ID'),
       settings: z.record(z.string(), z.unknown()).describe('Update-check settings'),
@@ -203,31 +284,31 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
     }
   );
 
-  registerTool(server, 'get_environment_image_prune', 'Retrieve the image prune settings for a Dockhand environment (schedule and retention policy). Use `set_environment_image_prune` to change them; see also `get_environment_timezone` and `get_environment_update_check` for other per-environment settings.',
+  registerTool(server, 'get_environment_image_prune',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get(`/api/environments/${encodePath(environmentId)}/image-prune`));
     }
   );
 
-  registerTool(server, 'set_environment_image_prune', 'Configure the image prune policy for a Dockhand environment (schedule and retention). Use `get_environment_image_prune` to read the current settings; see also `set_environment_timezone` and `set_environment_update_check` for related settings.',
+  registerTool(server, 'set_environment_image_prune',
     {
       environmentId: z.number().describe('Environment ID'),
       settings: z.record(z.string(), z.unknown()).describe('Image prune settings'),
     },
     async ({ environmentId, settings }) => {
-      return jsonResponse(await client.put(`/api/environments/${encodePath(environmentId)}/image-prune`, settings));
+      return jsonResponse(await client.post(`/api/environments/${encodePath(environmentId)}/image-prune`, settings));
     }
   );
 
-  registerTool(server, 'list_environment_notifications', 'List all notification channels configured for a Dockhand environment. Use `create_environment_notification` to add one, `get_environment_notification` to inspect a single entry, or `delete_environment_notification` to remove one.',
+  registerTool(server, 'list_environment_notifications',
     { environmentId: z.number().describe('Environment ID') },
     async ({ environmentId }) => {
       return jsonResponse(await client.get(`/api/environments/${encodePath(environmentId)}/notifications`));
     }
   );
 
-  registerTool(server, 'create_environment_notification', 'Add a new notification channel to a Dockhand environment using the supplied configuration. Use `list_environment_notifications` to see existing entries, `get_environment_notification` to inspect one, or `delete_environment_notification` to remove one.',
+  registerTool(server, 'create_environment_notification',
     {
       environmentId: z.number().describe('Environment ID'),
       config: z.record(z.string(), z.unknown()).describe('Notification configuration'),
@@ -237,7 +318,7 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
     }
   );
 
-  registerTool(server, 'get_environment_notification', 'Retrieve details of a single notification channel for a Dockhand environment by notification ID. Use `list_environment_notifications` to discover IDs, `create_environment_notification` to add one, or `delete_environment_notification` to remove one.',
+  registerTool(server, 'get_environment_notification',
     {
       environmentId: z.number().describe('Environment ID'),
       notificationId: z.number().describe('Notification ID'),
@@ -247,7 +328,7 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
     }
   );
 
-  registerTool(server, 'delete_environment_notification', 'Permanently delete a notification channel from a Dockhand environment — this action cannot be undone. Use `list_environment_notifications` or `get_environment_notification` to confirm the target before removing, or `create_environment_notification` to add a replacement.',
+  registerTool(server, 'delete_environment_notification',
     {
       environmentId: z.number().describe('Environment ID'),
       notificationId: z.number().describe('Notification ID'),
@@ -257,7 +338,7 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
     }
   );
 
-  registerTool(server, 'update_environment_notification', 'Update an existing notification channel on an environment (URL, type, filters, etc.); read the current values first with `get_environment_notification`, or use `delete_environment_notification` to remove instead of amending.',
+  registerTool(server, 'update_environment_notification',
     {
       environmentId: z.number().describe('Environment ID'),
       notificationId: z.number().describe('Notification ID'),
@@ -268,12 +349,12 @@ export function registerEnvironmentTools(server: McpServer, client: DockhandClie
     }
   );
 
-  registerTool(server, 'trigger_environment_image_prune', 'Trigger an immediate image-prune sweep for an environment using the configured retention policy (separate from the GET/PUT pair `get_environment_image_prune` and `set_environment_image_prune` which read and modify the schedule/retention settings).',
+  registerTool(server, 'trigger_environment_image_prune',
     {
       environmentId: z.number().describe('Environment ID'),
     },
     async ({ environmentId }) => {
-      return jsonResponse(await client.post(`/api/environments/${encodePath(environmentId)}/image-prune`, undefined));
+      return jsonResponse(await client.put(`/api/environments/${encodePath(environmentId)}/image-prune`, undefined));
     }
   );
 }

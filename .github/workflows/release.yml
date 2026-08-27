@@ -7,6 +7,17 @@ on:
   schedule:
     - cron: '0 3 * * *'  # 03:00 UTC nightly
   workflow_dispatch:
+    inputs:
+      build_tag:
+        # Wiederherstellungspfad: Schlaegt ein Lauf NACH dem Git-Push, aber VOR
+        # dem Image-Build fehl (real passiert am 17.08.2026 waehrend einer
+        # GitHub-Stoerung — Tag v1.13.2 gepusht, GitHub-Release und Image
+        # fehlten), dann meldet ein erneuter Lauf "no new release" und
+        # docker-build wird uebersprungen. Ohne diesen Eingang gibt es dann
+        # keinen Weg mehr, das Image zum bestehenden Tag zu bauen.
+        description: 'Vorhandenen Release-Tag bauen (z. B. v1.13.2) statt ein neues Release zu erzeugen. Leer lassen fuer den normalen Lauf.'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -18,8 +29,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     outputs:
-      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
-      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+      # Der Zwangs-Build setzt dieselben Ausgaben wie ein echter Release-Lauf,
+      # damit docker-build/docker-merge unveraendert bleiben.
+      new_release_published: ${{ steps.forced.outputs.new_release_published || steps.semantic.outputs.new_release_published }}
+      new_release_version: ${{ steps.forced.outputs.new_release_version || steps.semantic.outputs.new_release_version }}
 
     steps:
       - name: Checkout
@@ -28,29 +41,63 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Resolve forced tag build
+        id: forced
+        if: ${{ github.event.inputs.build_tag != '' }}
+        env:
+          BUILD_TAG: ${{ github.event.inputs.build_tag }}
+        run: |
+          set -euo pipefail
+          # Eingang wird ueber env uebergeben und nur in Anfuehrungszeichen
+          # verwendet — nie in den Skripttext interpoliert.
+          if ! git rev-parse --verify "refs/tags/${BUILD_TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag '${BUILD_TAG}' existiert nicht — nichts zu bauen."
+            exit 1
+          fi
+          echo "new_release_published=true" >> "$GITHUB_OUTPUT"
+          echo "new_release_version=${BUILD_TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Zwangs-Build fuer vorhandenen Tag ${BUILD_TAG} — semantic-release wird uebersprungen."
+
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        if: ${{ github.event.inputs.build_tag == '' }}
+        uses: actions/setup-node@v7
         with:
           node-version: "lts/*"
 
       - name: Install dependencies
+        if: ${{ github.event.inputs.build_tag == '' }}
         run: npm install
 
       - name: Release
         id: semantic
+        if: ${{ github.event.inputs.build_tag == '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx semantic-release > release_output.txt 2>&1
-          cat release_output.txt
+          # Die Ausgabe MUSS im Log stehen. Zuvor lief hier
+          # `npx semantic-release > release_output.txt 2>&1`, wodurch bei einem
+          # Fehlschlag `bash -e` den nachfolgenden `cat` nie erreichte: Der Job
+          # brach mit exit 1 ab und das Log enthielt keine einzige Zeile zur
+          # Ursache (real passiert am 17.08.2026 — die Diagnose musste danach
+          # aus dem Git-Zustand rekonstruiert werden). `tee` zeigt und sichert
+          # die Ausgabe gleichzeitig.
+          set -o pipefail
+          status=0
+          npx semantic-release 2>&1 | tee release_output.txt || status=$?
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::semantic-release ist mit Status ${status} gescheitert — die vollstaendige Ausgabe steht oben im Log."
+            echo "::warning::Pruefen, ob Tag und Versions-Commit trotzdem gepusht wurden. Falls ja, ist das Release halb erfolgt: GitHub-Release nachtragen und diesen Workflow mit dem Eingang build_tag erneut starten, damit das Image gebaut wird."
+            exit "$status"
+          fi
 
           if grep -q "Published release" release_output.txt; then
-            echo "new_release_published=true" >> $GITHUB_OUTPUT
+            echo "new_release_published=true" >> "$GITHUB_OUTPUT"
             VERSION=$(grep "Published release" release_output.txt | sed -n 's/.*Published release \([0-9.]*\).*/\1/p' | head -1)
-            echo "new_release_version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "new_release_version=${VERSION}" >> "$GITHUB_OUTPUT"
             echo "New release: ${VERSION}"
           else
-            echo "new_release_published=false" >> $GITHUB_OUTPUT
+            echo "new_release_published=false" >> "$GITHUB_OUTPUT"
             echo "No new release"
           fi
 
@@ -77,6 +124,16 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: v${{ needs.release.outputs.new_release_version }}
+
+      # The checked-out ref is the release TAG, which @semantic-release/git creates on
+      # its own commit (e.g. a CHANGELOG.md/package.json version bump) — NOT the commit
+      # that triggered the `release` job. `github.sha` still refers to the latter, so
+      # using it as MCP_GIT_SHA below would bake the pre-release commit into the image
+      # instead of the commit actually being built. Resolve the real, checked-out
+      # revision explicitly instead.
+      - name: Resolve checked-out revision
+        id: rev
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Compute lowercase image ref
         id: image
@@ -110,6 +167,10 @@ jobs:
           outputs: type=image,name=${{ steps.image.outputs.ref }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          build-args: |
+            MCP_SERVER_VERSION=${{ needs.release.outputs.new_release_version }}
+            MCP_GIT_SHA=${{ steps.rev.outputs.sha }}
+            MCP_BUILD_DATE=${{ steps.ts.outputs.created }}
           labels: |
             org.opencontainers.image.title=MCP-Dockhand
             org.opencontainers.image.description=Model Context Protocol (MCP) Server for Dockhand Docker Management — 130+ tools for container, stack, image, network, and volume management.
@@ -117,7 +178,7 @@ jobs:
             org.opencontainers.image.url=https://github.com/${{ github.repository }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.release.outputs.new_release_version }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
             org.opencontainers.image.created=${{ steps.ts.outputs.created }}
             org.opencontainers.image.licenses=MIT
 
@@ -145,7 +206,7 @@ jobs:
 
     steps:
       - name: Download digest artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: digest-*
           path: /tmp/digests

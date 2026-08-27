@@ -10,16 +10,55 @@
  * - COVERED: Endpunkt hat ein MCP-Tool
  * - MISSING_TOOL: Endpunkt existiert in API aber kein MCP-Tool
  * - ORPHANED_TOOL: MCP-Tool referenziert Endpunkt der nicht (mehr) existiert
- * - PARAM_MISMATCH: Parameter stimmen nicht überein
+ * - PARAM_MISMATCH: Path-Parameter stimmen nicht überein (Anzahl + Namens-Suffix)
  * - MISSING_ENCODE: Path-Parameter wird nicht mit encodePath() encoded
+ * - QUERY_PARAM_MISSING_REQUIRED: der Endpunkt 400ed ohne diesen Query-Parameter
+ *   (per-Methode required/optional aus dem Schema, siehe docs/dockhand-api-schema.json
+ *   `queryParamsByMethod`), das Tool sendet ihn nicht
+ * - QUERY_PARAM_UNKNOWN: Tool sendet einen Query-Parameter, den der Endpunkt nicht kennt
+ * - BODY_PARAM_MISSING_REQUIRED: der Endpunkt verlangt dieses Feld laut OpenAPI-Body-Contract
+ *   (docs/dockhand-openapi.json), das Tool sendet es nicht als required (Task P2.2, Gate seit
+ *   P2.1-Voll-Sweep + #171)
+ * - BODY_PARAM_UNKNOWN / UNTYPED_PASSTHROUGH / BODY_CONTRACT_UNRESOLVED: weiterhin advisory
+ *   (siehe scripts/lib/body-checks.mjs, docs/body-contract-report.md)
+ * - CROSSREF_UNRESOLVED: eine `(from METHOD /api/path)`- bzw. `<feld> from METHOD /api/path`-
+ *   Cross-Ref-Annotation in docs/dockhand-openapi.json zeigt auf einen Endpunkt, den kein
+ *   MCP-Tool bedient (Tippfehler in der Annotation oder bewusst ausgelassener Endpunkt) --
+ *   advisory, Task P3.6 (siehe scripts/lib/crossref-checks.mjs)
  *
- * Exit-Code 1 bei Mismatches (ORPHANED_TOOL oder PARAM_MISMATCH)
- * Exit-Code 0 wenn nur MISSING_TOOL (neue Endpunkte sind normal)
+ * MISSING_TOOL wird seit Task P3.7 (ADR docs/adr/0001-omission-registry.md, Refs #57) weiter
+ * unterteilt: ein Treffer in der Omission-Registry (docs/omitted-endpoints.json -- Endpunkte,
+ * die WIR BEWUSST NIE als Tool aufnehmen, z.B. das in #171 entfernte
+ * `POST /api/git/stacks/{id}/env-files`) wandert nach `deliberatelyOmitted` statt
+ * `missingTool` -- sichtbar in docs/coverage.md unter "Deliberately omitted", aber nicht
+ * mehr als offene Lücke gemeldet. Eine ECHTE Lücke (z.B. die Backup-API, #202, 30 fehlende
+ * Tools -- geplant, nur noch nicht gebaut) bleibt unverändert `missingTool`. Siehe
+ * scripts/lib/omission-registry.mjs (`partitionMissingTools()`).
+ *
+ * Required vs. optional kommt aus dem Schema (von extract-dockhand-api.mjs anhand des
+ * echten `if (!x) { ... status: 4xx ... }`-Guards im Handler klassifiziert) — es gibt
+ * KEINEN manuellen Re-Check mehr. Ein fehlender REQUIRED Query-Param ist ein harter
+ * Fehler (Exit 1); ein fehlender optionaler Query-Param wird gar nicht mehr gemeldet
+ * (der frühere "QUERY_PARAM_MISSING (informativ)"-Eimer, der jeden fehlenden Query-Param
+ * unabhängig von required/optional nur als Warnung auflistete, entfällt vollständig).
+ *
+ * Exit-Code 1 bei Mismatches (ORPHANED_TOOL, PARAM_MISMATCH, MISSING_ENCODE,
+ * QUERY_PARAM_UNKNOWN, QUERY_PARAM_MISSING_REQUIRED oder BODY_PARAM_MISSING_REQUIRED --
+ * siehe hasCriticalErrors()/CRITICAL_BODY_FINDING_TYPES weiter unten)
+ * Exit-Code 0 wenn nur MISSING_TOOL oder die übrigen (advisory) Body-Finding-Typen
+ * (neue Endpunkte ohne Tool sind normal, advisory Body-Findings sind keine garantierten Bugs)
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import { findMatchingClose, splitTopLevel, extractObjectKey } from './lib/js-scan.mjs';
+import { resolveQueryParamKeys } from './lib/query-params.mjs';
+import { getBodyContract, getOperationParamNames, loadOpenApiSpec } from './lib/openapi-contract-source.mjs';
+import { computeBodyFindings } from './lib/body-checks.mjs';
+import { checkCrossRefs, buildCrossRefEntries } from './lib/crossref-checks.mjs';
+import { partitionMissingTools } from './lib/omission-registry.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +67,17 @@ const PROJECT_ROOT = resolve(__dirname, '..');
 const SCHEMA_FILE = join(PROJECT_ROOT, 'docs', 'dockhand-api-schema.json');
 const TOOLS_DIR = join(PROJECT_ROOT, 'src', 'tools');
 const REPORT_FILE = join(PROJECT_ROOT, 'validation-report.md');
+const COLLECT_SHAPES_SCRIPT = join(__dirname, 'collect-tool-shapes.mjs');
+const OMITTED_ENDPOINTS_FILE = join(PROJECT_ROOT, 'docs', 'omitted-endpoints.json');
+
+/**
+ * HTTP-Methoden, für die die Body-Contract-Checks (Task P1.4) überhaupt sinnvoll sind --
+ * GET/DELETE-Aufrufe unserer Tools tragen (bis auf seltene Ausnahmen, die hier bewusst
+ * nicht mitgeprüft werden) keinen JSON-Request-Body, ihr Zod-Shape enthält nur
+ * Query-/Path-Parameter. Ein Body-Check gegen sie würde nur BODY_CONTRACT_UNRESOLVED-Rauschen
+ * erzeugen (kein `requestBody` im Schema, obwohl gar keiner erwartet wird).
+ */
+const BODY_CARRYING_HTTP_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
 // HTTP-Methoden-Mapping: client.method → HTTP-Methode
 const CLIENT_METHOD_MAP = {
@@ -41,6 +91,24 @@ const CLIENT_METHOD_MAP = {
   delete: 'DELETE',
   patch: 'PATCH',
 };
+
+// DockhandClient-Methoden bei denen der Query-Params-Record das 2. Argument ist:
+// get(path, params?), getRaw(path, params?), delete(path, params?)
+const GET_LIKE_METHODS = new Set(['get', 'getRaw', 'delete']);
+
+// DockhandClient-Methoden bei denen der Query-Params-Record das 3. Argument ist
+// (nach dem Body): post(path, body?, params?), put(path, body?, params?), ...
+const BODY_LIKE_METHODS = new Set(['post', 'postSSE', 'postMultipart', 'put', 'putSSE', 'patch']);
+
+/**
+ * `env` ist der universelle Environment-Scoping-Query-Param, den fast jeder Tool-Call
+ * mitschickt. extract-dockhand-api.mjs filtert ihn beim Schema-Bau bewusst heraus
+ * (`if (!['env'].includes(param))`), taucht also NIE in ep.queryParams auf — er darf
+ * deshalb nie als QUERY_PARAM_UNKNOWN markiert werden. `envId` und alle anderen
+ * Query-Params werden normal geprüft (siehe Issue #95 / #81: dort erwartete das Schema
+ * `envId`, das Tool sendete nur `env` — envId fehlte tatsächlich).
+ */
+const WHITELISTED_QUERY_PARAMS = new Set(['env']);
 
 /**
  * Lädt das API-Schema
@@ -56,64 +124,156 @@ function loadSchema() {
 }
 
 /**
+ * Lädt die Omission-Registry (docs/omitted-endpoints.json, ADR
+ * docs/adr/0001-omission-registry.md, Task P3.7). Anders als loadSchema() bricht ein
+ * fehlendes File hier NICHT ab -- die Registry ist eine bewusst optionale Verfeinerung von
+ * MISSING_TOOL, kein Pflicht-Artefakt wie das API-Schema. Fehlt die Datei (z.B. in einem
+ * Kontext, der nur das Repo teilweise auscheckt), verhält sich partitionMissingTools() mit
+ * `[]` identisch zum Vor-P3.7-Verhalten: alles bleibt `realGaps`.
+ * @returns {Array<{method: string, path: string, reason: string, adr?: string, date?: string}>}
+ */
+function loadOmissionRegistry() {
+  if (!existsSync(OMITTED_ENDPOINTS_FILE)) return [];
+  return JSON.parse(readFileSync(OMITTED_ENDPOINTS_FILE, 'utf8'));
+}
+
+// --- Query-Param-Key-Extraktion für Aufruf-Argumente ---
+//
+// Die MCP-Tools rufen `client.<method>(path, body?, params?)` teils einzeilig, teils
+// über mehrere Zeilen auf (siehe z.B. containers.ts get_container_logs), und der
+// `params`-Ausdruck ist manchmal ein Objekt-Literal, manchmal ein Ternary
+// (`cond ? {...} : undefined`, siehe get_registry_catalog). Der komplette
+// Argument-Ausdruck muss deshalb geparst werden — nicht nur die eine Zeile mit dem
+// Funktionsnamen. `findMatchingClose`/`splitTopLevel`/`extractObjectKey` kommen aus
+// `lib/js-scan.mjs` (gemeinsam mit extract-dockhand-api.mjs genutzt), die eigentliche
+// Objekt-/Ternary-Auflösung aus `lib/query-params.mjs`.
+
+/**
+ * Extrahiert die statisch bestimmbaren Query-Param-Keys eines `client.<method>(...)`
+ * Aufrufs.
+ * @param {string} content Gesamter Datei-Inhalt
+ * @param {number} openParenIndex Index der öffnenden Klammer des Aufrufs
+ * @param {string} clientMethod z.B. 'get', 'post', ...
+ * @returns {string[]|null} Keys, oder `null` wenn nicht statisch analysierbar
+ *   (z.B. Params als Variable übergeben statt als Objekt-Literal)
+ */
+function extractCallQueryParamKeys(content, openParenIndex, clientMethod) {
+  let paramsIdx;
+  if (GET_LIKE_METHODS.has(clientMethod)) {
+    paramsIdx = 1;
+  } else if (BODY_LIKE_METHODS.has(clientMethod)) {
+    paramsIdx = 2;
+  } else {
+    return null;
+  }
+
+  const closeParenIndex = findMatchingClose(content, openParenIndex);
+  if (closeParenIndex === -1) return null;
+
+  const argsText = content.slice(openParenIndex + 1, closeParenIndex);
+  const args = splitTopLevel(argsText);
+  const paramsArgText = args[paramsIdx];
+
+  // Kein Params-Argument im Aufruf (z.B. `client.delete('/api/settings/scanner')`) heißt
+  // definitiv "sendet keine Query-Params" — kein Auflösungsproblem, sondern ein
+  // eindeutiger Fakt. Das MUSS geprüft werden, nicht übersprungen werden: genau dieses
+  // Muster ist real ein Bug (`reset_scanner_settings` ruft `client.delete(path)` ganz
+  // ohne Params auf, der Handler verlangt aber `removeImages=true` — 400 garantiert).
+  if (paramsArgText === undefined) return [];
+
+  return resolveQueryParamKeys(paramsArgText);
+}
+
+/**
+ * Extrahiert alle API-Aufrufe aus dem Inhalt EINER Tool-Datei.
+ * @param {string} file Dateiname (nur für Reporting)
+ * @param {string} content Datei-Inhalt
+ * @returns {Array<{file: string, toolName: string, httpMethod: string, path: string, usesEncode: boolean, hasPathParams: boolean, queryParamKeys: string[]|null, line: number}>}
+ */
+function extractToolCallsFromSource(file, content) {
+  const calls = [];
+  const lines = content.split('\n');
+
+  // Zeilen-Start-Offsets für die Umrechnung Zeile+Spalte → absoluter Index in `content`.
+  const lineOffsets = [];
+  {
+    let offset = 0;
+    for (const l of lines) {
+      lineOffsets.push(offset);
+      offset += l.length + 1; // +1 für das durch split('\n') entfernte '\n'
+    }
+  }
+
+  let currentTool = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Erkenne Tool-Registrierungen
+    const toolMatch = line.match(/registerTool\s*\(\s*server\s*,\s*['"]([^'"]+)['"]/);
+    if (toolMatch) {
+      currentTool = toolMatch[1];
+    }
+
+    // Erkenne API-Aufrufe: client.get('/api/...'), client.post(`/api/...`)
+    const callMatch = line.match(
+      /client\.(\w+)\s*\(\s*[`'"]([^`'"]*(?:\$\{[^}]+\}[^`'"]*)*)[`'"]/
+    );
+    if (callMatch && currentTool) {
+      const [, clientMethod, rawPath] = callMatch;
+      const httpMethod = CLIENT_METHOD_MAP[clientMethod];
+
+      if (!httpMethod) continue; // Kein bekannter HTTP-Method-Aufruf
+
+      // Konvertiere Template-Literale zu Schema-Pfad-Format
+      // `/api/containers/${encodePath(id)}` → `/api/containers/{id}`
+      let normalizedPath = rawPath
+        .replace(/\$\{encodePath\((\w+)\)\}/g, '{$1}')
+        .replace(/\$\{(\w+)\}/g, '{$1}');
+
+      // Fix #30 (HIGH): Per-interpolation encodePath check (PR #25).
+      // Each ${...} interpolation must use encodePath, not just any occurrence in the string.
+      const interpolations = [...rawPath.matchAll(/\$\{([^}]+)\}/g)].map((m) => m[1]);
+      const hasPathParams = normalizedPath.includes('{');
+      const usesEncode = hasPathParams
+        ? interpolations.every((expr) => expr.includes('encodePath'))
+        : true;
+
+      // Query-Param-Keys: der komplette Aufruf kann über mehrere Zeilen gehen
+      // (z.B. containers.ts get_container_logs), deshalb ab hier im Volltext weiterscannen.
+      const absoluteMatchStart = lineOffsets[i] + callMatch.index;
+      const openParenIndex = content.indexOf('(', absoluteMatchStart);
+      const queryParamKeys =
+        openParenIndex === -1 ? null : extractCallQueryParamKeys(content, openParenIndex, clientMethod);
+
+      calls.push({
+        file,
+        toolName: currentTool,
+        httpMethod,
+        path: normalizedPath,
+        usesEncode,
+        hasPathParams,
+        queryParamKeys,
+        line: i + 1,
+      });
+    }
+  }
+
+  return calls;
+}
+
+/**
  * Extrahiert alle API-Aufrufe aus den MCP-Tool-Dateien
- * @returns {Array<{file: string, toolName: string, httpMethod: string, path: string, usesEncode: boolean, line: number}>}
+ * @returns {Array<{file: string, toolName: string, httpMethod: string, path: string, usesEncode: boolean, queryParamKeys: string[]|null, line: number}>}
  */
 function extractToolCalls() {
   const calls = [];
-  const files = readdirSync(TOOLS_DIR).filter(f => f.endsWith('.ts') && f !== 'index.ts');
+  const files = readdirSync(TOOLS_DIR).filter((f) => f.endsWith('.ts') && f !== 'index.ts');
 
   for (const file of files) {
     const filePath = join(TOOLS_DIR, file);
     const content = readFileSync(filePath, 'utf8');
-    const lines = content.split('\n');
-
-    let currentTool = null;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // Erkenne Tool-Registrierungen
-      const toolMatch = line.match(/registerTool\s*\(\s*server\s*,\s*['"]([^'"]+)['"]/);
-      if (toolMatch) {
-        currentTool = toolMatch[1];
-      }
-
-      // Erkenne API-Aufrufe: client.get('/api/...'), client.post(`/api/...`)
-      const callMatch = line.match(
-        /client\.(\w+)\s*\(\s*[`'"]([^`'"]*(?:\$\{[^}]+\}[^`'"]*)*)[`'"]/
-      );
-      if (callMatch && currentTool) {
-        const [, clientMethod, rawPath] = callMatch;
-        const httpMethod = CLIENT_METHOD_MAP[clientMethod];
-
-        if (!httpMethod) continue; // Kein bekannter HTTP-Method-Aufruf
-
-        // Konvertiere Template-Literale zu Schema-Pfad-Format
-        // `/api/containers/${encodePath(id)}` → `/api/containers/{id}`
-        let normalizedPath = rawPath
-          .replace(/\$\{encodePath\((\w+)\)\}/g, '{$1}')
-          .replace(/\$\{(\w+)\}/g, '{$1}');
-
-        // Fix #30 (HIGH): Per-interpolation encodePath check (PR #25).
-        // Each ${...} interpolation must use encodePath, not just any occurrence in the string.
-        const interpolations = [...rawPath.matchAll(/\$\{([^}]+)\}/g)].map(m => m[1]);
-        const hasPathParams = normalizedPath.includes('{');
-        const usesEncode = hasPathParams
-          ? interpolations.every(expr => expr.includes('encodePath'))
-          : true;
-
-        calls.push({
-          file,
-          toolName: currentTool,
-          httpMethod,
-          path: normalizedPath,
-          usesEncode,
-          hasPathParams,
-          line: i + 1,
-        });
-      }
-    }
+    calls.push(...extractToolCallsFromSource(file, content));
   }
 
   return calls;
@@ -140,15 +300,351 @@ function endpointKey(path, method) {
 }
 
 /**
- * Hauptvalidierung
+ * Vergleicht die Path-Parameter eines Tool-Aufrufs mit denen des Schema-Endpunkts.
+ *
+ * Nicht einfach String-Gleichheit: das Schema nutzt die generischen SvelteKit
+ * Routen-Namen (z.B. `id`, `type`), die Tools verwenden bewusst sprechende
+ * Variablennamen (z.B. `containerId`, `providerId`). Verifiziert gegen den echten
+ * Bestand (Issue #95, 2026-08): von 141 Path-Param-Vergleichen matchen nur 20 exakt
+ * als String — reine Namens-Identität wäre für dieses Repo also ein Dauer-Fehlalarm.
+ * Stattdessen: gleiche Anzahl UND pro Position ist der Schema-Name (case-insensitiv)
+ * ein Suffix des Tool-Variablennamens (`id` ⊂ `containerId`, `type` ⊂ `type`,
+ * `notificationId` ⊂ `notificationId`) — das deckt alle 141 realen Fälle ab, ohne
+ * echte Namensabweichungen (z.B. eine komplett falsche Variable an einer Position)
+ * durchzulassen.
+ * @param {string[]} callParams
+ * @param {string[]} schemaParams
+ * @returns {boolean} true wenn die Parameter als übereinstimmend gelten
  */
-function validate() {
-  const schema = loadSchema();
-  const toolCalls = extractToolCalls();
+function pathParamsMatch(callParams, schemaParams) {
+  if (callParams.length !== schemaParams.length) return false;
+  for (let i = 0; i < callParams.length; i++) {
+    const call = callParams[i].toLowerCase();
+    const schema = schemaParams[i].toLowerCase();
+    if (call !== schema && !call.endsWith(schema)) return false;
+  }
+  return true;
+}
 
-  console.error(`[validate] Schema: ${schema.endpointCount} Endpunkte (Commit: ${schema.sourceCommit.substring(0, 8)})`);
-  console.error(`[validate] MCP Tools: ${toolCalls.length} API-Aufrufe gefunden`);
+/**
+ * Diffed die von einem Tool-Aufruf gesendeten Query-Param-Keys gegen die vom Schema
+ * für den Endpunkt PRO METHODE bekannten Query-Params (inkl. required/optional).
+ *
+ * Required-vs-optional ersetzt den früheren manuellen Re-Check vollständig: ein
+ * fehlender REQUIRED Param ist immer ein Bug (der Endpunkt 400ed nachweislich ohne ihn,
+ * siehe route-handlers.mjs), ein fehlender optionaler Param wird gar nicht mehr
+ * gemeldet — er war nie ein verlässliches Signal.
+ * @param {string[]} sentKeys Roh extrahierte Keys (inkl. ggf. whitelisteter wie `env`)
+ * @param {Array<{name: string, required: boolean}>|undefined} schemaParams
+ *   `ep.queryParamsByMethod[method]`
+ * @param {{ checkMissing: boolean }} options `checkMissing` bewusst weiterhin ein Flag
+ *   (nicht fest `true`): Aufrufer, die den Endpunkt nicht method-genau auflösen können,
+ *   sollen den Missing-Check gezielt abschalten können, ohne unknown mit abzuschalten.
+ * @returns {{ missingRequired: string[], unknown: string[] }}
+ */
+function diffQueryParams(sentKeys, schemaParams, { checkMissing }) {
+  const known = new Set((schemaParams ?? []).map((p) => p.name));
+  const sent = sentKeys.filter((k) => !WHITELISTED_QUERY_PARAMS.has(k));
 
+  const unknown = sent.filter((k) => !known.has(k));
+
+  let missingRequired = [];
+  if (checkMissing && schemaParams) {
+    const sentSet = new Set(sent);
+    missingRequired = schemaParams.filter((p) => p.required && !sentSet.has(p.name)).map((p) => p.name);
+  }
+
+  return { missingRequired, unknown };
+}
+
+// Endpunkte die wir bewusst ignorieren (Streams, Callbacks, interne)
+const IGNORED_PATTERNS = [
+  '/api/auth/login',           // Login wird nicht über MCP gemacht
+  '/api/auth/oidc/callback',   // OAuth Callback
+  '/stream',                   // SSE Streams (werden über postSSE abgedeckt)
+  '/api/debug/',               // Debug-Endpunkte
+  '/api/self-update',          // Self-Update (gefährlich über MCP)
+  '/api/events',               // SSE Event-Stream
+  '/api/jobs/',                // Interne Job-Verwaltung
+  '/api/hawser/connect',       // Hawser Agent-Verbindung
+  '/api/environments/{*}/icon',          // Icon-Upload (binary)
+  '/api/environments/{*}/disk-warning',  // Disk-Warning (intern)
+  '/api/profile/avatar',                 // Avatar-Upload (binary)
+];
+
+/**
+ * Prüft, ob ein Pfad zu den bewusst ausgeschlossenen Endpunkten gehört (Streams,
+ * Callbacks, interne Routen — siehe IGNORED_PATTERNS).
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isIgnored(path) {
+  const normalized = normalizePath(path);
+  return IGNORED_PATTERNS.some((p) => normalized.includes(p) || normalized === normalizePath(p));
+}
+
+// --- Body-Contract-Checks (Task P1.4/P1.6, advisory) ---
+//
+// Die Body-Contract-Quelle (docs/dockhand-openapi.json, siehe scripts/lib/
+// openapi-contract-source.mjs) indiziert Endpunkte per exaktem Pfad-String samt der
+// dortigen Parameter-Namen (z.B. '/api/containers/{id}/rename'), unser eigenes
+// dockhand-api-schema.json samt der Tool-Aufrufe kennt aber die SPRECHENDEN
+// Variablennamen der Tools (z.B. '/api/containers/{containerId}/rename', siehe
+// pathParamsMatch() oben). buildOpenApiPathIndex() überbrückt das über dieselbe
+// normalizePath()-Normalisierung (alle {…} → {*}), die schon schemaEndpoints/
+// toolEndpoints benutzen — kein zweiter Normalisierungs-Mechanismus.
+
+/**
+ * Baut einen Lookup von `endpointKey(normalisierter Pfad, METHODE)` auf den ECHTEN
+ * OpenAPI-Pfad-String (mit den OpenAPI-eigenen Parameternamen), damit getBodyContract()/
+ * getOperationParamNames() mit dem exakten Pfad aufgerufen werden können, den die Spec
+ * kennt — unabhängig davon, wie unsere Tools ihre Path-Parameter benennen.
+ * @returns {Map<string, string>|null} `null`, wenn docs/dockhand-openapi.json (noch) nicht
+ *   existiert (z.B. lokal vor dem ersten `node scripts/fetch-openapi.mjs`) — Body-Checks
+ *   werden dann komplett übersprungen, nicht mit einem Fehler abgebrochen.
+ */
+function buildOpenApiPathIndex() {
+  let spec;
+  try {
+    spec = loadOpenApiSpec();
+  } catch {
+    return null;
+  }
+
+  const index = new Map();
+  for (const [path, methods] of Object.entries(spec.paths ?? {})) {
+    for (const method of Object.keys(methods)) {
+      index.set(endpointKey(path, method.toUpperCase()), path);
+    }
+  }
+  return index;
+}
+
+// --- Cross-Ref-Unresolved-Check (Task P3.6, advisory) ---
+//
+// Same "own resolver, no cross-stack import" reasoning as scripts/generate-tool-endpoint-map.mjs's
+// buildMap(): rather than importing src/openapi/tool-endpoint.ts's endpointToTool() (TypeScript,
+// would need a tsx subprocess like loadToolBodyShapes() below), this builds an equivalent
+// method+path -> toolName index directly from the SAME toolCalls + openApiPathIndex this file
+// already extracts for the body-contract checks -- no new I/O, no tsx dependency.
+
+/**
+ * Builds a `endpointKey(realOpenApiPath, METHOD) -> toolName` index from `toolCalls`, by
+ * resolving each call's own path form to the OpenAPI spec's path form via `openApiPathIndex`
+ * (same normalizePath()-based matching `buildOpenApiPathIndex()`'s callers already rely on).
+ * First tool call to reach a given real endpoint wins (mirrors generate-tool-endpoint-map.mjs's
+ * `buildMap()` "first call wins" rule) -- acceptable here because this index is advisory-only
+ * (CROSSREF_UNRESOLVED never gates the exit code, see computeCrossRefFindings() below): a
+ * cross-ref resolving to the "wrong" of two tools sharing an endpoint is still correctly
+ * reported as RESOLVED, which is all this check cares about.
+ * @param {Array} toolCalls Rückgabe von extractToolCalls()
+ * @param {Map<string, string>} openApiPathIndex Rückgabe von buildOpenApiPathIndex()
+ * @returns {Map<string, string>}
+ */
+function buildEndpointToToolIndex(toolCalls, openApiPathIndex) {
+  const index = new Map();
+  for (const call of toolCalls) {
+    const realPath = openApiPathIndex.get(endpointKey(call.path, call.httpMethod));
+    if (!realPath) continue; // endpoint not (yet) in the OpenAPI spec -- same skip as computeBodyFindingsForCalls()
+    const key = endpointKey(realPath, call.httpMethod);
+    if (!index.has(key)) index.set(key, call.toolName);
+  }
+  return index;
+}
+
+/**
+ * Computes CROSSREF_UNRESOLVED findings (Task P3.6) for every cross-ref annotation in
+ * `docs/dockhand-openapi.json` whose target endpoint no registered MCP tool serves.
+ * Advisory: the caller MUST NOT fold the result into hasCriticalErrors() (see that
+ * function's own doc comment for the full list of what IS critical).
+ * @param {Array} toolCalls Rückgabe von extractToolCalls()
+ * @param {Map<string, string>|null} openApiPathIndex Rückgabe von buildOpenApiPathIndex()
+ * @returns {import('./lib/crossref-checks.mjs').CrossRefFinding[]}
+ */
+function computeCrossRefFindings(toolCalls, openApiPathIndex) {
+  if (!openApiPathIndex) return [];
+
+  let spec;
+  try {
+    spec = loadOpenApiSpec();
+  } catch {
+    return [];
+  }
+
+  const endpointToToolIndex = buildEndpointToToolIndex(toolCalls, openApiPathIndex);
+  const endpointToTool = (method, path) => endpointToToolIndex.get(endpointKey(path, method));
+
+  const entries = buildCrossRefEntries(spec, endpointToTool);
+  return checkCrossRefs(entries, endpointToTool);
+}
+
+/**
+ * Thrown by loadToolBodyShapes() when the `tsx` subprocess collector fails for ANY reason
+ * (the `npx tsx` invocation itself errors/exits non-zero, or its stdout is not valid JSON).
+ *
+ * Ground truth for WHY this is now a dedicated error type instead of a swallowed `null`
+ * (Refs #173, follow-up to #172's hard BODY_PARAM_MISSING_REQUIRED gate): the OLD
+ * loadToolBodyShapes() caught every failure and returned `null`, which computeValidation()
+ * treats as "body-checks intentionally skipped" -- the EXACT same signal a caller sends by
+ * never calling loadToolBodyShapes() at all (e.g. generate-coverage-doc.mjs's 2-arg
+ * computeValidation() call). That made "the collector crashed" indistinguishable from "body
+ * checks were never requested", so the hard gate went silently fail-open on a broken
+ * collector: CI stayed green even though the check never ran. `tsx` is a committed
+ * devDependency and every CI job runs `npm ci` before `validate-mcp-tools.mjs` (see
+ * .github/workflows/ci.yml, api-schema-sync.yml) -- there is no longer a legitimate
+ * "tsx isn't installed" case to stay silent for.
+ */
+class BodyShapeCollectorError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = 'BodyShapeCollectorError';
+  }
+}
+
+/**
+ * Sammelt die Body-Shapes ALLER registrierten MCP-Tools, indem der eigenständige
+ * `tsx`-Collector (scripts/collect-tool-shapes.mjs) als Subprozess ausgeführt wird — siehe
+ * dessen Datei-Kopf-Kommentar für das WARUM (plain `node` kann `.ts`-Tool-Dateien nicht
+ * importieren, `validate-mcp-tools.mjs` selbst bleibt bewusst `tsx`-frei).
+ *
+ * Fail-CLOSED seit #173 (vorher fail-open, siehe BodyShapeCollectorError-JSDoc oben):
+ * schlägt der Collector-Subprozess fehl ODER liefert kein valides JSON auf stdout, wirft
+ * diese Funktion eine BodyShapeCollectorError -- der einzige Aufrufer (validate(), unten)
+ * fängt sie ab und bricht mit Exit 1 und einer klaren "body-contract collector failed"-
+ * Meldung ab, BEVOR computeValidation() überhaupt läuft. Ein Collector-Lauf, der sauber
+ * durchläuft und (legitim) 0 Tool-Shapes meldet, ist davon unterschieden: `JSON.parse('{}')`
+ * wirft NICHT, liefert nur ein leeres Objekt -- computeValidation() sieht dann ganz normal
+ * 0 Body-Findings und der Exit-Code bleibt 0 (kein anderer Bucket betroffen).
+ * @param {string} [scriptPath] Pfad zum Collector-Script (Default COLLECT_SHAPES_SCRIPT).
+ *   Nur für Tests parametrisierbar (siehe tests/body-shape-collector.test.ts), damit ein
+ *   Collector-Crash ohne echten Bug in collect-tool-shapes.mjs simuliert werden kann.
+ * @returns {Record<string, { sentFields: string[], requiredSent: string[], passthrough: boolean }>}
+ * @throws {BodyShapeCollectorError}
+ */
+function loadToolBodyShapes(scriptPath = COLLECT_SHAPES_SCRIPT) {
+  let output;
+  try {
+    output = execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['tsx', scriptPath], {
+      cwd: PROJECT_ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'inherit'],
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (err) {
+    throw new BodyShapeCollectorError(`body-contract collector failed: ${err.message}`, { cause: err });
+  }
+
+  try {
+    return JSON.parse(output);
+  } catch (err) {
+    throw new BodyShapeCollectorError(`body-contract collector failed: collector output is not valid JSON (${err.message})`, { cause: err });
+  }
+}
+
+/**
+ * Berechnet die Body-Contract-Findings für ALLE Tool-Aufrufe (Task P1.4), mit
+ * Tool-/Endpunkt-Kontext für den Report angereichert.
+ * @param {Array} toolCalls Rückgabe von extractToolCalls()
+ * @param {Record<string, { sentFields: string[], requiredSent: string[], passthrough: boolean }>} toolBodyShapes
+ * @param {Map<string, string>} openApiPathIndex Rückgabe von buildOpenApiPathIndex()
+ * @returns {Array<{type: string, field?: string, toolName: string, httpMethod: string, path: string, file: string, line: number}>}
+ */
+/**
+ * `environmentId` ist der universelle Environment-Scoping-Feldname, den praktisch jeder
+ * mutierende Tool-Call für den OpenAPI Query-Param `env` mitschickt (dieselbe Konvention,
+ * die `WHITELISTED_QUERY_PARAMS` oben für die Query-Diff-Prüfung nutzt) — er ist NIE
+ * selbst ein Body-Feld und wird deshalb IMMER von BODY_PARAM_UNKNOWN ausgenommen,
+ * unabhängig davon, wie die OpenAPI-Spec ihren eigenen `env`-Parameter benennt.
+ */
+const ENVIRONMENT_SCOPING_FIELD_NAMES = ['environmentId'];
+
+/**
+ * Extrahiert die Path-Parameter-NAMEN, wie unsere eigenen Tools sie nennen, direkt aus
+ * `call.path` (z.B. `/api/containers/{containerId}/rename` → `['containerId']`).
+ *
+ * Bewusst NICHT aus `getOperationParamNames()` (der OpenAPI-Spec): die Spec kennt ihre
+ * EIGENEN, oft anders lautenden Namen (SvelteKit-Routen-Konvention, z.B. `id`), unsere
+ * Tools verwenden sprechendere Variablennamen (z.B. `containerId`) — exakt dasselbe
+ * Namens-Mismatch, das `pathParamsMatch()` oben bereits über Suffix-Matching lösen muss,
+ * dort aber für einen ANDEREN Zweck (Anzahl/Reihenfolge-Validierung). Da `call.path`s
+ * `{…}`-Platzhalter denselben Bezeichner tragen wie das Zod-Shape-Feld (beides kommt aus
+ * derselben TS-Quelle -- `${encodePath(containerId)}` im Template-Literal UND
+ * `containerId: z.string()` im Zod-Schema verwenden dieselbe Variable), ist ein exakter
+ * String-Vergleich hier ausreichend -- keine Suffix-Fuzziness nötig.
+ * @param {string} path
+ * @returns {string[]}
+ */
+function extractToolPathParamNames(path) {
+  return [...path.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]);
+}
+
+function computeBodyFindingsForCalls(toolCalls, toolBodyShapes, openApiPathIndex) {
+  const results = [];
+
+  for (const call of toolCalls) {
+    if (!BODY_CARRYING_HTTP_METHODS.has(call.httpMethod)) continue;
+    if (isIgnored(call.path)) continue;
+
+    const shape = toolBodyShapes[call.toolName];
+    if (!shape) continue; // Tool nicht im Collector-Output (sollte nicht vorkommen)
+
+    const realPath = openApiPathIndex.get(endpointKey(call.path, call.httpMethod));
+    if (!realPath) continue; // Endpunkt (noch) nicht in der OpenAPI-Spec (P1341-Annotationsstand)
+
+    const contract = getBodyContract(call.httpMethod, realPath);
+    // Union aus: (1) unseren eigenen Path-Param-Namen (exakt, aus call.path), (2) dem
+    // universellen `environmentId`, (3) den von der Spec selbst gemeldeten Namen (schadet
+    // nicht, falls sie zufällig übereinstimmen) -- siehe Doc-Kommentare oben, WARUM (1)+(2)
+    // nötig sind und nicht einfach (3) allein reicht.
+    const opParams = [
+      ...extractToolPathParamNames(call.path),
+      ...ENVIRONMENT_SCOPING_FIELD_NAMES,
+      ...getOperationParamNames(call.httpMethod, realPath),
+    ];
+    const findings = computeBodyFindings(contract, shape, opParams, call.toolName);
+
+    for (const finding of findings) {
+      results.push({
+        ...finding,
+        toolName: call.toolName,
+        httpMethod: call.httpMethod,
+        path: call.path,
+        file: call.file,
+        line: call.line,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Reine Berechnung der Validierungs-Buckets aus Schema + extrahierten Tool-Aufrufen —
+ * ohne I/O (kein Datei-Read, kein console.error). Wird sowohl von der CLI-Validierung
+ * (`validate()`) als auch vom Coverage-Doc-Generator (`generate-coverage-doc.mjs`)
+ * genutzt, damit beide garantiert dieselben Zahlen liefern.
+ * @param {object} schema Geladenes docs/dockhand-api-schema.json
+ * @param {Array} toolCalls Rückgabe von extractToolCalls()
+ * @param {Record<string, {sentFields: string[], requiredSent: string[], passthrough: boolean}>|null} [toolBodyShapes]
+ *   Rückgabe von loadToolBodyShapes() (Task P1.4/P1.6, advisory). `null`/`undefined`
+ *   (Default) überspringt die Body-Contract-Checks komplett -- `bodyFindings` ist dann
+ *   immer `[]`, alle bestehenden Buckets/Exit-Code-Verhalten bleiben UNVERÄNDERT. Damit
+ *   bleiben bestehende Aufrufer wie generate-coverage-doc.mjs (2 Argumente) unverändert
+ *   kompatibel.
+ * @param {Array<{method: string, path: string, reason: string, adr?: string, date?: string}>} [registry]
+ *   Rückgabe von loadOmissionRegistry() (Task P3.7, ADR docs/adr/0001-omission-registry.md).
+ *   `[]` (Default) lässt `missingTool` unverändert (alles bleibt in diesem Bucket, wie vor
+ *   P3.7) -- bestehende Aufrufer mit 2/3 Argumenten bleiben kompatibel. Ein Registry-Treffer
+ *   wandert aus `missingTool` nach `deliberatelyOmitted`, siehe partitionMissingTools()
+ *   (scripts/lib/omission-registry.mjs).
+ * @returns {{
+ *   covered: Array, missingTool: Array, deliberatelyOmitted: Array, orphanedTool: Array,
+ *   paramMismatch: Array, missingEncode: Array, queryParamMissingRequired: Array,
+ *   queryParamUnknown: Array, bodyFindings: Array, crossRefFindings: Array,
+ *   excludedCount: number
+ * }}
+ */
+function computeValidation(schema, toolCalls, toolBodyShapes = null, registry = []) {
   // Baue Lookup-Maps
   const schemaEndpoints = new Map();
   for (const ep of schema.endpoints) {
@@ -173,33 +669,19 @@ function validate() {
   const orphanedTool = [];
   const paramMismatch = [];
   const missingEncode = [];
-
-  // Endpunkte die wir bewusst ignorieren (Streams, Callbacks, interne)
-  const ignoredPatterns = [
-    '/api/auth/login',           // Login wird nicht über MCP gemacht
-    '/api/auth/oidc/callback',   // OAuth Callback
-    '/stream',                   // SSE Streams (werden über postSSE abgedeckt)
-    '/api/debug/',               // Debug-Endpunkte
-    '/api/self-update',          // Self-Update (gefährlich über MCP)
-    '/api/events',               // SSE Event-Stream
-    '/api/jobs/',                // Interne Job-Verwaltung
-    '/api/hawser/connect',       // Hawser Agent-Verbindung
-    '/api/environments/{*}/icon',          // Icon-Upload (binary)
-    '/api/environments/{*}/disk-warning',  // Disk-Warning (intern)
-    '/api/profile/avatar',                 // Avatar-Upload (binary)
-  ];
-
-  function isIgnored(path) {
-    const normalized = normalizePath(path);
-    return ignoredPatterns.some(p => normalized.includes(p) || normalized === normalizePath(p));
-  }
+  const queryParamMissingRequired = [];
+  const queryParamUnknown = [];
+  let excludedCount = 0;
 
   // 1. Prüfe Schema-Endpunkte → COVERED oder MISSING_TOOL
   for (const ep of schema.endpoints) {
     for (const method of ep.methods) {
       const key = endpointKey(ep.path, method);
 
-      if (isIgnored(ep.path)) continue;
+      if (isIgnored(ep.path)) {
+        excludedCount++;
+        continue;
+      }
 
       if (toolEndpoints.has(key)) {
         covered.push({ path: ep.path, method, tools: toolEndpoints.get(key).map(t => t.toolName) });
@@ -233,14 +715,14 @@ function validate() {
     }
   }
 
-  // 4. Prüfe Path-Parameter-Übereinstimmung
+  // 4. Prüfe Path-Parameter-Übereinstimmung (Anzahl + Namens-Suffix, siehe pathParamsMatch())
   for (const call of toolCalls) {
     const key = endpointKey(call.path, call.httpMethod);
     const schemaEp = schemaEndpoints.get(key);
     if (schemaEp && schemaEp.pathParams) {
       const callParams = [...call.path.matchAll(/\{([^}]+)\}/g)].map(m => m[1]);
       const schemaParams = schemaEp.pathParams;
-      if (callParams.length !== schemaParams.length) {
+      if (!pathParamsMatch(callParams, schemaParams)) {
         paramMismatch.push({
           ...call,
           expected: schemaParams,
@@ -250,14 +732,205 @@ function validate() {
     }
   }
 
+  // 5. Prüfe Query-Parameter (fehlend / unbekannt) — Issue #95, required-aware seit
+  // der queryParamsByMethod-Umstellung (kein manueller Re-Check mehr nötig).
+  for (const call of toolCalls) {
+    if (call.queryParamKeys === null) continue; // Params als Variable übergeben, nicht statisch analysierbar
+    if (isIgnored(call.path)) continue;
+
+    const key = endpointKey(call.path, call.httpMethod);
+    const schemaEp = schemaEndpoints.get(key);
+    if (!schemaEp) continue; // ORPHANED_TOOL deckt das schon ab
+
+    // Query-Params sind jetzt PRO METHODE im Schema (extract-dockhand-api.mjs scannt
+    // jeden Handler-Body einzeln, nicht mehr die ganze Datei) — der Missing-Check kann
+    // deshalb für JEDEN Endpunkt laufen, nicht mehr nur bei Dateien mit genau einer
+    // HTTP-Methode.
+    const { missingRequired, unknown } = diffQueryParams(
+      call.queryParamKeys,
+      schemaEp.queryParamsByMethod?.[call.httpMethod],
+      { checkMissing: true }
+    );
+
+    for (const p of missingRequired) {
+      queryParamMissingRequired.push({ ...call, queryParam: p });
+    }
+    for (const p of unknown) {
+      queryParamUnknown.push({ ...call, queryParam: p });
+    }
+  }
+
+  // 6. Body-Contract-Checks (Task P1.4/P1.6) -- toolBodyShapes ist nur gesetzt, wenn der
+  // Aufrufer loadToolBodyShapes() erfolgreich ausgeführt hat. Kein Effekt auf
+  // covered/missingTool/.../queryParamUnknown -- eigener Bucket. Seit Task P2.2 ist
+  // BODY_PARAM_MISSING_REQUIRED darin selbst kritisch (siehe hasCriticalErrors() unten);
+  // die übrigen drei Finding-Typen bleiben advisory.
+  //
+  // openApiPathIndex wird UNABHÄNGIG von toolBodyShapes gebaut (anders als vorher) --
+  // computeCrossRefFindings() (Task P3.6, Schritt 7 unten) braucht ihn genauso, hat aber
+  // KEINE Abhängigkeit vom tsx-Body-Shape-Collector (der einzige Grund, warum Body-Checks
+  // an toolBodyShapes gekoppelt sind). `null`, wenn docs/dockhand-openapi.json (noch) nicht
+  // existiert -- beide Checks überspringen sich dann selbst (siehe buildOpenApiPathIndex()
+  // JSDoc).
+  const openApiPathIndex = buildOpenApiPathIndex();
+
+  let bodyFindings = [];
+  if (toolBodyShapes && openApiPathIndex) {
+    bodyFindings = computeBodyFindingsForCalls(toolCalls, toolBodyShapes, openApiPathIndex);
+  }
+
+  // 7. Cross-Ref-Unresolved-Check (Task P3.6, advisory) -- unabhängig von toolBodyShapes,
+  // siehe computeCrossRefFindings() JSDoc.
+  const crossRefFindings = computeCrossRefFindings(toolCalls, openApiPathIndex);
+
+  // 8. Omission-Governance (Task P3.7, ADR docs/adr/0001-omission-registry.md) -- trennt die
+  // rohen MISSING_TOOL-Funde aus Schritt 1 in `realGaps` (kein Registry-Treffer, bleibt
+  // MISSING_TOOL wie bisher -- war nie Teil von hasCriticalErrors(), Exit-Code-Verhalten
+  // also unverändert) und `deliberatelyOmitted` (Registry-Treffer, mit reason/adr
+  // angereichert -- sichtbar in docs/coverage.md, aber nicht mehr als Lücke gemeldet). Mit
+  // `registry = []` (Default) ist `realGaps` identisch zum rohen `missingTool` von vor
+  // P3.7 -- bestehende 2-/3-Argument-Aufrufer bleiben unverändert.
+  const { realGaps, deliberatelyOmitted } = partitionMissingTools(missingTool, registry);
+
+  return {
+    covered,
+    missingTool: realGaps,
+    deliberatelyOmitted,
+    orphanedTool,
+    paramMismatch,
+    missingEncode,
+    queryParamMissingRequired,
+    queryParamUnknown,
+    bodyFindings,
+    crossRefFindings,
+    excludedCount,
+  };
+}
+
+/**
+ * Body-Finding-Typen, die seit Task P2.2 als kritisch gelten (CI-Fail + Auto-Issue, wie
+ * ORPHANED_TOOL/PARAM_MISMATCH/QUERY_PARAM_*). Bewusst als Set, nicht als einzelner
+ * String-Vergleich verstreut über die Datei -- eine einzige Stelle, die künftig eine
+ * zweite Body-Finding-Klasse (z.B. BODY_PARAM_UNKNOWN) mit ins Gate aufnehmen könnte,
+ * ohne hasCriticalErrors()/partitionBodyFindings() an mehreren Stellen anzufassen.
+ *
+ * NUR BODY_PARAM_MISSING_REQUIRED wandert hier rein (Plan Task P2.2, Step 1: "UNKNOWN/
+ * UNTYPED_PASSTHROUGH bleiben Warning/Info") -- BODY_CONTRACT_UNRESOLVED bleibt ebenfalls
+ * advisory (fehlende OpenAPI-Annotation ist kein Tool-Bug, sondern eine Dokumentationslücke
+ * im Dockhand-Fork).
+ */
+const CRITICAL_BODY_FINDING_TYPES = new Set(['BODY_PARAM_MISSING_REQUIRED']);
+
+/**
+ * Trennt `bodyFindings` (computeValidation()s advisory-Bucket, Task P1.4/P1.6) in die seit
+ * Task P2.2 kritischen (`CRITICAL_BODY_FINDING_TYPES`) und die weiterhin advisory Findings.
+ * Single Source of Truth für BEIDE Stellen, die diese Unterscheidung brauchen:
+ * `hasCriticalErrors()` (Exit-Code) und `generateReport()` (welche Tabelle/Section ein
+ * Finding bekommt) -- verhindert, dass die beiden je einen eigenen, potenziell
+ * auseinanderlaufenden Filter pflegen.
+ * @param {Array<{type: string}>} bodyFindings
+ * @returns {{ critical: Array, advisory: Array }}
+ */
+function partitionBodyFindings(bodyFindings) {
+  const critical = [];
+  const advisory = [];
+  for (const finding of bodyFindings) {
+    (CRITICAL_BODY_FINDING_TYPES.has(finding.type) ? critical : advisory).push(finding);
+  }
+  return { critical, advisory };
+}
+
+/**
+ * Bestimmt, ob ein computeValidation()-Ergebnis einen kritischen Mismatch enthält, der den
+ * CLI-Exit-Code in validate() auf 1 setzen soll. Aus validate() herausgelöst (Task P2.2),
+ * damit das Gate-Verhalten unit-testbar ist, ohne echte Schema-/Tool-Datei-I/O oder den
+ * tsx-Body-Shape-Collector-Subprozess anzustoßen -- ein synthetisches, computeValidation()
+ * -förmiges Ergebnisobjekt reicht.
+ *
+ * BODY_PARAM_MISSING_REQUIRED zählt seit Task P2.2 GENAUSO kritisch wie ORPHANED_TOOL/
+ * PARAM_MISMATCH/MISSING_ENCODE/QUERY_PARAM_*: der P2.1-Voll-Sweep hat die beiden bekannten
+ * False-Positive-Klassen strukturell ausgeschlossen (z.record(...)-Ganzkörper-Passthrough
+ * über UNTYPED_PASSTHROUGH, FP_COMPUTED_BODY über `WHITELISTED_BODY_PASSTHROUGH` in
+ * body-checks.mjs) und die verbleibenden echten Bugs gefixt (#171) -- auf der gepinnten
+ * Spec (docs/dockhand-openapi.json) ist dieser Bucket damit 0 (siehe
+ * docs/body-contract-report.md, das aktuell KEINE BODY_PARAM_MISSING_REQUIRED-Section
+ * enthält). Die übrigen drei Body-Finding-Typen (BODY_PARAM_UNKNOWN, UNTYPED_PASSTHROUGH,
+ * BODY_CONTRACT_UNRESOLVED) bleiben BEWUSST advisory (Plan Task P2.2, Step 1).
+ * @param {{ orphanedTool: Array, paramMismatch: Array, missingEncode: Array,
+ *   queryParamUnknown: Array, queryParamMissingRequired: Array, bodyFindings: Array }} result
+ * @returns {boolean}
+ */
+function hasCriticalErrors(result) {
+  const { critical: criticalBodyFindings } = partitionBodyFindings(result.bodyFindings ?? []);
+  return (
+    result.orphanedTool.length > 0 ||
+    result.paramMismatch.length > 0 ||
+    result.missingEncode.length > 0 ||
+    result.queryParamUnknown.length > 0 ||
+    result.queryParamMissingRequired.length > 0 ||
+    criticalBodyFindings.length > 0
+  );
+}
+
+/**
+ * Hauptvalidierung (CLI-Einstiegspunkt: lädt Schema + Tool-Aufrufe von der Platte,
+ * berechnet die Buckets über computeValidation(), schreibt den Report, setzt den
+ * Exit-Code).
+ */
+function validate() {
+  const schema = loadSchema();
+  const toolCalls = extractToolCalls();
+
+  console.error(`[validate] Schema: ${schema.endpointCount} Endpunkte (Commit: ${schema.sourceCommit.substring(0, 8)})`);
+  console.error(`[validate] MCP Tools: ${toolCalls.length} API-Aufrufe gefunden`);
+
+  // Body-Contract-Checks (Task P1.4/P1.6) sind fail-CLOSED seit #173: schlägt der
+  // tsx-Collector fehl (BodyShapeCollectorError, siehe loadToolBodyShapes()-JSDoc), bricht
+  // dieser CLI-Lauf HART ab -- kein stiller Rückfall mehr auf "Body-Checks übersprungen".
+  let toolBodyShapes;
+  try {
+    toolBodyShapes = loadToolBodyShapes();
+  } catch (err) {
+    if (err instanceof BodyShapeCollectorError) {
+      console.error(`\n[validate] KRITISCH: ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  }
+  console.error(`[validate] Body-Shapes: ${Object.keys(toolBodyShapes).length} Tools erfasst (tsx-Collector)`);
+
+  // Omission-Registry (Task P3.7) -- optional, siehe loadOmissionRegistry() JSDoc.
+  const registry = loadOmissionRegistry();
+  if (registry.length > 0) {
+    console.error(`[validate] Omission-Registry: ${registry.length} bewusst ausgelassene Endpunkte (docs/omitted-endpoints.json)`);
+  }
+
+  const {
+    covered,
+    missingTool,
+    deliberatelyOmitted,
+    orphanedTool,
+    paramMismatch,
+    missingEncode,
+    queryParamMissingRequired,
+    queryParamUnknown,
+    bodyFindings,
+    crossRefFindings,
+  } = computeValidation(schema, toolCalls, toolBodyShapes, registry);
+
   // Report generieren
   const report = generateReport({
     schema,
     covered,
     missingTool,
+    deliberatelyOmitted,
     orphanedTool,
     paramMismatch,
     missingEncode,
+    queryParamMissingRequired,
+    queryParamUnknown,
+    bodyFindings,
+    crossRefFindings,
   });
 
   writeFileSync(REPORT_FILE, report, 'utf8');
@@ -265,14 +938,41 @@ function validate() {
 
   // Zusammenfassung
   console.error('\n--- Validierungs-Ergebnis ---');
-  console.error(`  COVERED:        ${covered.length} Endpunkte haben MCP-Tools`);
-  console.error(`  MISSING_TOOL:   ${missingTool.length} Endpunkte ohne MCP-Tool`);
-  console.error(`  ORPHANED_TOOL:  ${orphanedTool.length} MCP-Tools referenzieren nicht-existente Endpunkte`);
-  console.error(`  PARAM_MISMATCH: ${paramMismatch.length} Parameter-Inkonsistenzen`);
-  console.error(`  MISSING_ENCODE: ${missingEncode.length} fehlende encodePath()-Aufrufe`);
+  console.error(`  COVERED:            ${covered.length} Endpunkte haben MCP-Tools`);
+  console.error(`  MISSING_TOOL:       ${missingTool.length} Endpunkte ohne MCP-Tool (echte Lücken)`);
+  console.error(`  DELIBERATELY_OMITTED (informativ, kein Exit-Code-Effekt): ${deliberatelyOmitted.length} bewusst ausgelassene Endpunkte (Registry-Treffer)`);
+  console.error(`  ORPHANED_TOOL:      ${orphanedTool.length} MCP-Tools referenzieren nicht-existente Endpunkte`);
+  console.error(`  PARAM_MISMATCH:     ${paramMismatch.length} Path-Parameter-Inkonsistenzen`);
+  console.error(`  MISSING_ENCODE:     ${missingEncode.length} fehlende encodePath()-Aufrufe`);
+  console.error(`  QUERY_PARAM_MISSING_REQUIRED: ${queryParamMissingRequired.length} vom Endpunkt zwingend erwartete (400 ohne sie), nicht gesendete Query-Params`);
+  console.error(`  QUERY_PARAM_UNKNOWN: ${queryParamUnknown.length} gesendete, dem Endpunkt unbekannte Query-Params`);
+  const { critical: bodyFindingsCritical, advisory: bodyFindingsAdvisory } = partitionBodyFindings(bodyFindings);
+  console.error(`  BODY_PARAM_MISSING_REQUIRED: ${bodyFindingsCritical.length} laut Contract required Body-Felder, die das Tool nicht sendet`);
+  console.error(`  BODY_FINDINGS (informativ, kein Exit-Code-Effekt): ${bodyFindingsAdvisory.length}`);
+  console.error(`  CROSSREF_UNRESOLVED (informativ, kein Exit-Code-Effekt): ${crossRefFindings.length} Cross-Ref-Annotationen ohne bedienenden Tool`);
 
-  // Exit-Code: Fehler nur bei kritischen Problemen
-  const hasErrors = orphanedTool.length > 0 || paramMismatch.length > 0 || missingEncode.length > 0;
+  // Exit-Code: Fehler bei kritischen Problemen.
+  // QUERY_PARAM_UNKNOWN ist wie ORPHANED_TOOL/PARAM_MISMATCH eindeutig ein Bug (das
+  // Tool schickt einen Key, den die Route nachweislich nicht liest) — kritisch.
+  // QUERY_PARAM_MISSING_REQUIRED ist jetzt GENAUSO kritisch: das Schema kennt required
+  // vs. optional pro Methode aus dem echten `if (!x) { ... status: 4xx ... }`-Guard im
+  // Handler (route-handlers.mjs) — ein fehlender required Param bedeutet, der Aufruf
+  // 400ed garantiert. Fehlende OPTIONALE Params werden gar nicht erst in diesen Bucket
+  // aufgenommen (diffQueryParams filtert per `p.required`), es gibt also keinen
+  // informativen Nebeneimer mehr, der manuell nachgeprüft werden müsste.
+  //
+  // BODY_PARAM_MISSING_REQUIRED (Task P1.4) ist seit Task P2.2 GENAUSO kritisch -- siehe
+  // hasCriticalErrors()-JSDoc oben für das vollständige WARUM (P2.1-Voll-Sweep FP-frei,
+  // #171 gemergt). Die übrigen drei Body-Finding-Typen bleiben advisory, siehe
+  // partitionBodyFindings()/CRITICAL_BODY_FINDING_TYPES.
+  const hasErrors = hasCriticalErrors({
+    orphanedTool,
+    paramMismatch,
+    missingEncode,
+    queryParamUnknown,
+    queryParamMissingRequired,
+    bodyFindings,
+  });
   if (hasErrors) {
     console.error('\n[validate] FEHLER: Kritische Mismatches gefunden!');
     process.exit(1);
@@ -287,11 +987,26 @@ function validate() {
 }
 
 /**
- * Generiert den Markdown-Report
+ * computeBodyFindingsForCalls()'s return-element shape: the raw `BodyFinding`
+ * (scripts/lib/body-checks.mjs) enriched with the call site, so generateReport() can
+ * render a table row from it.
+ * @typedef {{ type: string, field?: string, expectedRequired?: string[], toolName: string, httpMethod: string, path: string, file: string, line: number }} EnrichedBodyFinding
  */
-function generateReport({ schema, covered, missingTool, orphanedTool, paramMismatch, missingEncode }) {
+
+/**
+ * Generiert den Markdown-Report
+ * @param {object} args
+ * @param {Array<EnrichedBodyFinding>} [args.bodyFindings]
+ * @param {Array<{type: string, tool: string, method: string, path: string}>} [args.crossRefFindings]
+ */
+function generateReport({ schema, covered, missingTool, deliberatelyOmitted = [], orphanedTool, paramMismatch, missingEncode, queryParamMissingRequired, queryParamUnknown, bodyFindings = [], crossRefFindings = [] }) {
   const lines = [];
   const now = new Date().toISOString();
+  // Task P2.2: BODY_PARAM_MISSING_REQUIRED bekommt eine eigene Kritisch-Section (analog zu
+  // QUERY_PARAM_MISSING_REQUIRED unten), die übrigen drei Body-Finding-Typen bleiben im
+  // bestehenden Informativ/Advisory-Block. Einzige Filterstelle: partitionBodyFindings()
+  // (dieselbe, die auch hasCriticalErrors() für den Exit-Code nutzt).
+  const { critical: bodyFindingsCritical, advisory: bodyFindingsAdvisory } = partitionBodyFindings(bodyFindings);
 
   lines.push('# MCP Tool Validation Report');
   lines.push('');
@@ -307,9 +1022,15 @@ function generateReport({ schema, covered, missingTool, orphanedTool, paramMisma
   lines.push('|--------|--------|');
   lines.push(`| COVERED | ${covered.length} |`);
   lines.push(`| MISSING_TOOL | ${missingTool.length} |`);
+  lines.push(`| DELIBERATELY_OMITTED (informativ) | ${deliberatelyOmitted.length} |`);
   lines.push(`| ORPHANED_TOOL | ${orphanedTool.length} |`);
   lines.push(`| PARAM_MISMATCH | ${paramMismatch.length} |`);
   lines.push(`| MISSING_ENCODE | ${missingEncode.length} |`);
+  lines.push(`| QUERY_PARAM_MISSING_REQUIRED | ${queryParamMissingRequired.length} |`);
+  lines.push(`| QUERY_PARAM_UNKNOWN | ${queryParamUnknown.length} |`);
+  lines.push(`| BODY_PARAM_MISSING_REQUIRED | ${bodyFindingsCritical.length} |`);
+  lines.push(`| BODY_FINDINGS (informativ, übrige Body-Typen) | ${bodyFindingsAdvisory.length} |`);
+  lines.push(`| CROSSREF_UNRESOLVED (informativ) | ${crossRefFindings.length} |`);
   lines.push('');
 
   // Kritische Probleme
@@ -352,6 +1073,106 @@ function generateReport({ schema, covered, missingTool, orphanedTool, paramMisma
     lines.push('');
   }
 
+  if (queryParamUnknown.length > 0) {
+    lines.push('## QUERY_PARAM_UNKNOWN (Kritisch)');
+    lines.push('');
+    lines.push('Das Tool sendet einen Query-Parameter, den der Endpunkt laut Schema nicht liest:');
+    lines.push('');
+    lines.push('| Tool | HTTP | Pfad | Unbekannter Parameter | Datei |');
+    lines.push('|------|------|------|------------------------|-------|');
+    for (const t of queryParamUnknown) {
+      lines.push(`| \`${t.toolName}\` | ${t.httpMethod} | \`${t.path}\` | \`${t.queryParam}\` | ${t.file}:${t.line} |`);
+    }
+    lines.push('');
+  }
+
+  if (queryParamMissingRequired.length > 0) {
+    lines.push('## QUERY_PARAM_MISSING_REQUIRED (Kritisch)');
+    lines.push('');
+    lines.push('Der Endpunkt verlangt diesen Query-Parameter zwingend (der Handler 400ed ohne ihn —');
+    lines.push('siehe `queryParamsByMethod` im Schema), das Tool sendet ihn nicht. Der Aufruf schlägt');
+    lines.push('garantiert fehl:');
+    lines.push('');
+    lines.push('| Tool | HTTP | Pfad | Fehlender Pflicht-Parameter | Datei |');
+    lines.push('|------|------|------|------------------------------|-------|');
+    for (const t of queryParamMissingRequired) {
+      lines.push(`| \`${t.toolName}\` | ${t.httpMethod} | \`${t.path}\` | \`${t.queryParam}\` | ${t.file}:${t.line} |`);
+    }
+    lines.push('');
+  }
+
+  // BODY_PARAM_MISSING_REQUIRED (Task P2.2, Kritisch) -- seit dem P2.1-Voll-Sweep
+  // (Fehlalarme strukturell ausgeschlossen, siehe body-checks.mjs) UND #171 (letzte echte
+  // Bugs gefixt) genauso kritisch wie QUERY_PARAM_MISSING_REQUIRED oben: der Contract
+  // verlangt dieses Feld laut `docs/dockhand-openapi.json`, das Tool sendet es nicht als
+  // required -- der Aufruf kann am echten Endpunkt fehlschlagen.
+  if (bodyFindingsCritical.length > 0) {
+    lines.push('## BODY_PARAM_MISSING_REQUIRED (Kritisch)');
+    lines.push('');
+    lines.push(
+      'Der OpenAPI-Body-Contract (`docs/dockhand-openapi.json`, siehe `scripts/fetch-openapi.mjs`) ' +
+        'verlangt dieses Feld für diesen Endpunkt, das Tool sendet es nicht als required. Der Aufruf ' +
+        'kann am echten Dockhand-Endpunkt fehlschlagen (siehe #142):'
+    );
+    lines.push('');
+    lines.push('| Tool | HTTP | Pfad | Fehlendes Pflicht-Feld | Datei |');
+    lines.push('|------|------|------|-------------------------|-------|');
+    for (const f of bodyFindingsCritical) {
+      lines.push(`| \`${f.toolName}\` | ${f.httpMethod} | \`${f.path}\` | \`${f.field}\` | ${f.file}:${f.line} |`);
+    }
+    lines.push('');
+  }
+
+  // Übrige Body-Contract-Findings (Task P1.4/P1.6, informativ/advisory -- KEIN
+  // Exit-Code-Effekt, siehe hasErrors in validate()). BODY_PARAM_MISSING_REQUIRED ist HIER
+  // bewusst NICHT mehr enthalten -- es hat seit Task P2.2 seine eigene Kritisch-Section
+  // oben; BODY_PARAM_UNKNOWN/UNTYPED_PASSTHROUGH/BODY_CONTRACT_UNRESOLVED bleiben advisory.
+  if (bodyFindingsAdvisory.length > 0) {
+    lines.push('## BODY_FINDINGS (Informativ / Advisory)');
+    lines.push('');
+    lines.push(
+      'Weitere Body-Contract-Abweichungen zwischen unseren MCP-Tools und der generierten ' +
+        '`docs/dockhand-openapi.json`. **Kein Gate** -- diese Findings beeinflussen den ' +
+        'Exit-Code NICHT (BODY_PARAM_MISSING_REQUIRED ist seit Task P2.2 kritisch und steht ' +
+        'in der eigenen Section oben; UNKNOWN/UNTYPED_PASSTHROUGH/UNRESOLVED bleiben bewusst ' +
+        'advisory).'
+    );
+    lines.push('');
+    lines.push('| Typ | Tool | HTTP | Pfad | Feld | Datei |');
+    lines.push('|-----|------|------|------|------|-------|');
+    for (const f of bodyFindingsAdvisory) {
+      lines.push(
+        `| ${f.type} | \`${f.toolName}\` | ${f.httpMethod} | \`${f.path}\` | ${f.field ? `\`${f.field}\`` : '-'} | ${f.file}:${f.line} |`
+      );
+    }
+    lines.push('');
+  }
+
+  // CROSSREF_UNRESOLVED (Task P3.6, informativ/advisory -- KEIN Exit-Code-Effekt). Eine
+  // `(from METHOD /api/path)`- bzw. `<feld> from METHOD /api/path`-Annotation in
+  // docs/dockhand-openapi.json zeigt auf einen Endpunkt, den kein MCP-Tool bedient --
+  // entweder ein Tippfehler in der Annotation, oder ein bewusst (noch) nicht bewrappter
+  // Endpunkt. `tool` ist der ANFRAGENDE Tool-Name (dessen Beschreibung die Annotation
+  // trägt), `method`/`path` sind das unaufgelöste ZIEL der Annotation -- siehe
+  // scripts/lib/crossref-checks.mjs.
+  if (crossRefFindings.length > 0) {
+    lines.push('## CROSSREF_UNRESOLVED (Informativ / Advisory)');
+    lines.push('');
+    lines.push(
+      'Cross-Ref-Annotationen in `docs/dockhand-openapi.json` (`(from METHOD /api/path)` ' +
+        'bzw. `<feld> from METHOD /api/path`), deren Ziel-Endpunkt kein registriertes ' +
+        'MCP-Tool bedient. **Kein Gate** -- Kandidaten für Tippfehler in der Annotation ODER ' +
+        'für die Omission-Registry (bewusst ausgelassene Endpunkte).'
+    );
+    lines.push('');
+    lines.push('| Anfragendes Tool/Endpunkt | Ziel-HTTP | Ziel-Pfad |');
+    lines.push('|---------------------------|-----------|-----------|');
+    for (const f of crossRefFindings) {
+      lines.push(`| \`${f.tool}\` | ${f.method} | \`${f.path}\` |`);
+    }
+    lines.push('');
+  }
+
   // Fehlende Tools (informativ)
   if (missingTool.length > 0) {
     lines.push('## MISSING_TOOL (Informativ)');
@@ -362,6 +1183,26 @@ function generateReport({ schema, covered, missingTool, orphanedTool, paramMisma
     lines.push('|------|------|----------------|');
     for (const t of missingTool) {
       lines.push(`| ${t.method} | \`${t.path}\` | ${t.pathParams?.join(', ') || '-'} |`);
+    }
+    lines.push('');
+  }
+
+  // Deliberately omitted (Task P3.7, ADR docs/adr/0001-omission-registry.md) -- Registry-
+  // Treffer aus MISSING_TOOL, SICHTBAR mit Begründung statt kommentarlos zu verschwinden.
+  // Kein Gate -- beeinflusst den Exit-Code nicht (MISSING_TOOL tat das schon vorher nicht).
+  if (deliberatelyOmitted.length > 0) {
+    lines.push('## Deliberately omitted (with reason)');
+    lines.push('');
+    lines.push(
+      'Endpunkte, die laut Schema existieren, aber laut `docs/omitted-endpoints.json` bewusst ' +
+        'NIE ein MCP-Tool bekommen sollen (siehe `docs/adr/0001-omission-registry.md`) -- ' +
+        'unterscheidet sich von MISSING_TOOL oben: das dort sind echte, noch offene Lücken.'
+    );
+    lines.push('');
+    lines.push('| HTTP | Pfad | Begründung | ADR |');
+    lines.push('|------|------|------------|-----|');
+    for (const t of deliberatelyOmitted) {
+      lines.push(`| ${t.method} | \`${t.path}\` | ${t.reason} | ${t.adr ?? '-'} |`);
     }
     lines.push('');
   }
@@ -383,4 +1224,37 @@ function generateReport({ schema, covered, missingTool, orphanedTool, paramMisma
   return lines.join('\n') + '\n';
 }
 
-validate();
+// Nur ausführen wenn direkt als CLI-Skript aufgerufen (nicht beim Import in Tests).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  validate();
+}
+
+export {
+  WHITELISTED_QUERY_PARAMS,
+  IGNORED_PATTERNS,
+  BODY_CARRYING_HTTP_METHODS,
+  splitTopLevel,
+  extractObjectKey,
+  findMatchingClose,
+  extractCallQueryParamKeys,
+  extractToolCallsFromSource,
+  extractToolCalls,
+  normalizePath,
+  endpointKey,
+  pathParamsMatch,
+  diffQueryParams,
+  isIgnored,
+  buildOpenApiPathIndex,
+  computeBodyFindingsForCalls,
+  buildEndpointToToolIndex,
+  computeCrossRefFindings,
+  computeValidation,
+  loadSchema,
+  loadOmissionRegistry,
+  CRITICAL_BODY_FINDING_TYPES,
+  partitionBodyFindings,
+  hasCriticalErrors,
+  generateReport,
+  loadToolBodyShapes,
+  BodyShapeCollectorError,
+};

@@ -1,0 +1,148 @@
+/**
+ * Reine Markdown-Erzeugung für docs/body-contract-report.md — die eingecheckte, dauerhaft
+ * sichtbare Übersicht der Body-Contract-Findings aus Task P1.4 (Gegenstück zum flüchtigen,
+ * gitignoreten `validation-report.md`, analog zu docs/coverage.md/coverage-report.mjs).
+ *
+ * Alle Funktionen hier sind reine Funktionen ohne I/O: sie nehmen `bodyFindings`
+ * entgegen (Rückgabe von computeValidation()s `bodyFindings`-Bucket, siehe
+ * validate-mcp-tools.mjs) und bauen daraus Markdown. Der eigentliche Datei-Schreib-
+ * Vorgang lebt in `generate-body-contract-doc.mjs`.
+ *
+ * BEWUSST ADVISORY (Task P1.6 / P1-Plan Global Constraints): dieses Dokument selbst ist eine
+ * reine Übersicht und löst keinen CI-Fail aus — unabhängig vom Finding-Typ. Seit Task P2.2
+ * ist BODY_PARAM_MISSING_REQUIRED (nach FP-freier Voll-Sweep-Triage, Task P2.1, und #171)
+ * zusätzlich ein hartes Gate in `scripts/validate-mcp-tools.mjs` (Exit 1 + Auto-`api-change`-
+ * Issue, siehe dessen `hasCriticalErrors()`/`validation-report.md`) — hier wird es weiterhin
+ * mitgelistet, rein zur Übersicht. Die übrigen drei Typen (BODY_PARAM_UNKNOWN,
+ * UNTYPED_PASSTHROUGH, BODY_CONTRACT_UNRESOLVED) bleiben vollständig advisory.
+ */
+
+const FINDING_ORDER = ['BODY_PARAM_MISSING_REQUIRED', 'BODY_PARAM_UNKNOWN', 'UNTYPED_PASSTHROUGH', 'BODY_CONTRACT_UNRESOLVED'];
+
+const FINDING_DESCRIPTIONS = {
+  BODY_PARAM_MISSING_REQUIRED:
+    'Ein laut OpenAPI-Contract required Body-Feld wird vom Tool nicht als required gesendet — der Aufruf kann am echten Endpunkt fehlschlagen (siehe #142).',
+  BODY_PARAM_UNKNOWN:
+    'Das Tool sendet ein Body-Feld, das der OpenAPI-Contract nicht kennt (nach Ausschluss der Query-/Path-Parameter der Operation).',
+  UNTYPED_PASSTHROUGH:
+    'Das Tool hat ein untypisiertes `z.record(...)`-Feld (z.B. `settings`), obwohl der Endpunkt einen aufgelösten Contract hat — statisch nicht vollständig prüfbar.',
+  BODY_CONTRACT_UNRESOLVED:
+    'Für diesen body-tragenden Endpunkt liegt (noch) kein OpenAPI-Contract vor (fehlende `@openapi`-JSDoc-Annotation im Dockhand-Fork).',
+};
+
+/**
+ * Rendert die "Feld"-Zelle einer Finding-Tabellenzeile. Ein `field` (die meisten
+ * Finding-Typen) hat Vorrang; ein `UNTYPED_PASSTHROUGH`-Finding hat stattdessen (optional)
+ * `expectedRequired` -- die Liste der laut Contract required Felder, die der Collector wegen
+ * des `z.record(...)`-Ganzkörper-Bodys nicht einzeln prüfen konnte (Task P2.1 Fix 1). Ohne
+ * eines von beidem bleibt es beim Platzhalter-Strich.
+ * @param {{field?: string, expectedRequired?: string[]}} finding
+ * @returns {string}
+ */
+function renderFieldCell(finding) {
+  if (finding.field) return `\`${finding.field}\``;
+  if (finding.expectedRequired?.length) {
+    return finding.expectedRequired.map((f) => `\`${f}\``).join(', ');
+  }
+  return '-';
+}
+
+/**
+ * Gruppiert die Findings nach Typ, in der festen FINDING_ORDER-Reihenfolge (kritischste
+ * zuerst), jede Gruppe intern nach Tool-Name sortiert.
+ * @param {Array<{type: string, field?: string, toolName: string, httpMethod: string, path: string, file: string, line: number}>} bodyFindings
+ * @returns {Array<{type: string, entries: Array}>}
+ */
+function groupFindingsByType(bodyFindings) {
+  const byType = new Map();
+  for (const finding of bodyFindings) {
+    if (!byType.has(finding.type)) byType.set(finding.type, []);
+    byType.get(finding.type).push(finding);
+  }
+
+  const types = FINDING_ORDER.filter((t) => byType.has(t));
+  // Unbekannte/neue Finding-Typen (falls computeBodyFindings() künftig erweitert wird)
+  // trotzdem anzeigen, statt sie stillschweigend zu verschlucken -- ans Ende gehängt.
+  for (const t of byType.keys()) {
+    if (!types.includes(t)) types.push(t);
+  }
+
+  return types.map((type) => ({
+    type,
+    entries: byType.get(type).slice().sort((a, b) => a.toolName.localeCompare(b.toolName)),
+  }));
+}
+
+/**
+ * Baut den vollständigen Markdown-Inhalt von docs/body-contract-report.md.
+ * @param {object} input
+ * @param {string} input.generatedAt ISO-Timestamp der Erzeugung
+ * @param {Array<{type: string, field?: string, toolName: string, httpMethod: string, path: string, file: string, line: number}>} input.bodyFindings
+ * @returns {string}
+ */
+function buildBodyContractDoc({ generatedAt, bodyFindings }) {
+  const lines = [];
+
+  lines.push('# MCP-Dockhand — Body-Contract-Findings');
+  lines.push('');
+  lines.push(
+    '> **Auto-generiert** von `scripts/generate-body-contract-doc.mjs` — nicht von Hand editieren.'
+  );
+  lines.push(
+    '> Wird täglich vom Workflow `.github/workflows/api-schema-sync.yml` neu erzeugt und bei'
+  );
+  lines.push(
+    '> Änderung committet. Grundlage: `docs/dockhand-openapi.json` (Body-Contract-Quelle,'
+  );
+  lines.push('> siehe `scripts/fetch-openapi.mjs`) gegen die registrierten Zod-Shapes unserer MCP-Tools.');
+  lines.push('');
+  lines.push(
+    '> **ADVISORY — kein CI-Gate.** Dieses Dokument selbst löst keinen Exit-Code aus. Seit Task'
+  );
+  lines.push(
+    '> P2.2 ist `BODY_PARAM_MISSING_REQUIRED` (nach FP-freier Voll-Sweep-Triage, Task P2.1) ein'
+  );
+  lines.push(
+    '> hartes Gate in `scripts/validate-mcp-tools.mjs` (Exit 1 + Auto-Issue) — hier weiterhin nur'
+  );
+  lines.push('> zur Übersicht gelistet. Die übrigen drei Typen bleiben vollständig advisory.');
+  lines.push('');
+  lines.push(`**Erzeugt:** ${generatedAt}`);
+  lines.push('');
+
+  lines.push('## Zusammenfassung');
+  lines.push('');
+  lines.push('| Typ | Anzahl | Bedeutung |');
+  lines.push('|-----|--------|-----------|');
+  const grouped = groupFindingsByType(bodyFindings);
+  for (const { type, entries } of grouped) {
+    lines.push(`| ${type} | ${entries.length} | ${FINDING_DESCRIPTIONS[type] ?? '-'} |`);
+  }
+  if (grouped.length === 0) {
+    lines.push('| *(keine)* | 0 | Keine Body-Contract-Abweichungen gefunden. |');
+  }
+  lines.push('');
+
+  if (grouped.length === 0) {
+    lines.push('Keine Findings — alle geprüften Tools stimmen mit ihrem OpenAPI-Body-Contract überein.');
+    lines.push('');
+    return lines.join('\n') + '\n';
+  }
+
+  for (const { type, entries } of grouped) {
+    lines.push(`## ${type} (${entries.length})`);
+    lines.push('');
+    lines.push(FINDING_DESCRIPTIONS[type] ?? '');
+    lines.push('');
+    lines.push('| Tool | HTTP | Pfad | Feld | Datei |');
+    lines.push('|------|------|------|------|-------|');
+    for (const e of entries) {
+      lines.push(`| \`${e.toolName}\` | ${e.httpMethod} | \`${e.path}\` | ${renderFieldCell(e)} | ${e.file}:${e.line} |`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+export { FINDING_ORDER, FINDING_DESCRIPTIONS, groupFindingsByType, buildBodyContractDoc };
